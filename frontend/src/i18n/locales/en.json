@@ -1,0 +1,98 @@
+{
+  "nav": {
+    "features": "Features",
+    "aiAgents": "AI Agents",
+    "marketplace": "Marketplace",
+    "dashboard": "Dashboard",
+    "signIn": "Sign In",
+    "joinNow": "Join Now",
+    "signOut": "Sign Out"
+  },
+  "hero": {
+    "badge": "AI-Powered Artisan Marketplace",
+    "title": "Empowering Artisans With",
+    "titleHighlight": "AI & Innovation",
+    "subtitle": "Connect traditional craftspeople with global markets through AI-powered verification, AR product visualization, and seamless e-commerce.",
+    "startSelling": "Start Selling",
+    "exploreCrafts": "Explore Crafts",
+    "statsArtisans": "Active Artisans",
+    "statsCountries": "Countries",
+    "statsProducts": "Verified Products",
+    "scrollText": "Scroll to explore"
+  },
+  "features": {
+    "title": "Next-Generation Technology For Timeless Crafts",
+    "subtitle": "We blend cutting-edge AI with traditional artistry to create a marketplace that preserves heritage while embracing innovation.",
+    "arTitle": "Immersive AR Product Visualization",
+    "arSubtitle": "See Before You Buy",
+    "arDescription": "Experience products in your space before purchasing. Our AR technology lets customers visualize handcrafted items in their homes using just their smartphone camera.",
+    "arBenefit1": "360° Product Views",
+    "arBenefit2": "Real-world Scale Preview",
+    "arBenefit3": "Instant AR Experience"
+  },
+  "aiAgents": {
+    "title": "AI-Powered Features",
+    "subtitle": "Intelligent tools designed to help artisans succeed"
+  },
+  "cta": {
+    "badge": "Join Thousands of Artisans",
+    "title": "Ready to Transform Your Craft Business?",
+    "subtitle": "Start your journey today and connect with customers worldwide. No technical skills needed.",
+    "startTrial": "Start Free Trial",
+    "scheduleDemo": "Schedule Demo",
+    "trustedBy": "Trusted by artisans in"
+  },
+  "footer": {
+    "description": "Empowering traditional artisans with cutting-edge AI technology to reach global markets.",
+    "platform": "Platform",
+    "marketplace": "Marketplace",
+    "forArtisans": "For Artisans",
+    "forBuyers": "For Buyers",
+    "verification": "Verification",
+    "resources": "Resources",
+    "documentation": "Documentation",
+    "aiGuide": "AI Guide",
+    "support": "Support",
+    "blog": "Blog",
+    "company": "Company",
+    "about": "About Us",
+    "careers": "Careers",
+    "contact": "Contact",
+    "partners": "Partners",
+    "rights": "All rights reserved.",
+    "privacy": "Privacy",
+    "terms": "Terms of Service",
+    "cookies": "Cookies"
+  },
+  "auth": {
+    "welcome": "Welcome to Ophelia",
+    "subtitle": "Join our community of artisans and craft enthusiasts",
+    "signUp": "Sign Up",
+    "signIn": "Sign In",
+    "email": "Email",
+    "password": "Password",
+    "fullName": "Full Name",
+    "userType": "I am a...",
+    "artisan": "Artisan (I want to sell)",
+    "buyer": "Buyer (I want to buy)",
+    "noAccount": "Don't have an account?",
+    "hasAccount": "Already have an account?",
+    "signUpButton": "Create Account",
+    "signInButton": "Sign In",
+    "errors": {
+      "passwordLength": "Password must be at least 6 characters",
+      "fillAll": "Please fill in all fields",
+      "selectUserType": "Please select whether you're an artisan or buyer"
+    }
+  },
+  "common": {
+    "loading": "Loading...",
+    "error": "Error",
+    "success": "Success",
+    "cancel": "Cancel",
+    "save": "Save",
+    "delete": "Delete",
+    "edit": "Edit",
+    "close": "Close"
+  }
+}
