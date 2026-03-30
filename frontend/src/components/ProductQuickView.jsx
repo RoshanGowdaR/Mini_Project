@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Eye, ShoppingCart, User } from "lucide-react";
+import { Eye, ShoppingCart, Star, User } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,10 @@ import {
 export default function ProductQuickView({ product, open, onOpenChange, currentUser }) {
   const navigate = useNavigate();
   const [selectedImage, setSelectedImage] = useState(0);
+
+  useEffect(() => {
+    setSelectedImage(0);
+  }, [product?._id]);
 
   if (!product) {
     return null;
@@ -73,6 +77,17 @@ export default function ProductQuickView({ product, open, onOpenChange, currentU
 
             <div>
               <p className="text-3xl font-bold text-primary">${Number(product.price || 0).toFixed(2)}</p>
+              <div className="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
+                <div className="flex items-center gap-1 text-yellow-500">
+                  <Star className="h-4 w-4 fill-current" />
+                  <span className="font-medium text-foreground">
+                    {Number(product.average_rating || 0).toFixed(product.review_count ? 1 : 0)}
+                  </span>
+                </div>
+                <span>
+                  ({product.review_count || 0} {product.review_count === 1 ? "review" : "reviews"})
+                </span>
+              </div>
             </div>
 
             <div className="space-y-2">

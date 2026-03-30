@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Heart, Loader2, MapPin, ShoppingCart, User } from "lucide-react";
+import { Heart, Loader2, MapPin, ShoppingCart, Star, User } from "lucide-react";
 import { toast } from "sonner";
 
 import Footer from "@/components/Footer";
@@ -21,6 +21,30 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/hooks/useAuth";
 
+const parseJsonSafely = async (response, fallback) => {
+  try {
+    return await response.json();
+  } catch {
+    return fallback;
+  }
+};
+
+const StarRatingInput = ({ value, onChange, disabled = false }) => (
+  <div className="flex items-center gap-1">
+    {[1, 2, 3, 4, 5].map((ratingValue) => (
+      <button
+        key={ratingValue}
+        type="button"
+        disabled={disabled}
+        onClick={() => onChange(ratingValue)}
+        className="text-yellow-500 disabled:cursor-not-allowed"
+      >
+        <Star className={`h-5 w-5 ${ratingValue <= value ? "fill-current" : ""}`} />
+      </button>
+    ))}
+  </div>
+);
+
 export default function ProductDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -30,7 +54,15 @@ export default function ProductDetail() {
   const [selectedImage, setSelectedImage] = useState(0);
   const [showBuyDialog, setShowBuyDialog] = useState(false);
   const [buyLoading, setBuyLoading] = useState(false);
+  const [reviewsLoading, setReviewsLoading] = useState(true);
+  const [reviews, setReviews] = useState([]);
+  const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [quantity, setQuantity] = useState(1);
+  const [reviewForm, setReviewForm] = useState({
+    rating: 5,
+    title: "",
+    comment: "",
+  });
   const [shippingAddress, setShippingAddress] = useState({
     name: "",
     address: "",
@@ -43,6 +75,7 @@ export default function ProductDetail() {
   useEffect(() => {
     if (id) {
       fetchProduct();
+      fetchReviews();
     }
   }, [id]);
 
@@ -54,13 +87,13 @@ export default function ProductDetail() {
         throw new Error("Failed to fetch product");
       }
 
-      const data = await response.json();
+      const data = await parseJsonSafely(response, null);
       const artisanId = typeof data.artisan_id === "object" ? data.artisan_id?._id : data.artisan_id;
       let artisanProfile = null;
 
       if (artisanId) {
         const artisanResponse = await fetch(`/api/artisans?userId=${artisanId}`);
-        const artisanData = await artisanResponse.json();
+        const artisanData = await parseJsonSafely(artisanResponse, []);
         artisanProfile = artisanData[0] || null;
       }
 
@@ -74,6 +107,28 @@ export default function ProductDetail() {
       navigate("/marketplace");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchReviews = async () => {
+    try {
+      setReviewsLoading(true);
+      const response = await fetch(`/api/products/${id}/reviews`);
+      const data = await parseJsonSafely(response, { reviews: [], summary: null });
+
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to fetch reviews");
+      }
+
+      setReviews(Array.isArray(data.reviews) ? data.reviews : []);
+      if (data.summary) {
+        setProduct((current) => (current ? { ...current, ...data.summary, artisan: current.artisan } : current));
+      }
+    } catch (error) {
+      console.error("Error fetching reviews:", error);
+      setReviews([]);
+    } finally {
+      setReviewsLoading(false);
     }
   };
 
@@ -123,7 +178,7 @@ export default function ProductDetail() {
         }),
       });
 
-      const data = await response.json();
+      const data = await parseJsonSafely(response, {});
       if (!response.ok) {
         throw new Error(data.message || "Failed to place order");
       }
@@ -135,6 +190,48 @@ export default function ProductDetail() {
       toast.error(error.message || "Failed to place order");
     } finally {
       setBuyLoading(false);
+    }
+  };
+
+  const handleReviewSubmit = async () => {
+    if (!user) {
+      toast.error("Please sign in to write a review");
+      navigate("/auth");
+      return;
+    }
+
+    if (isOwnProduct) {
+      toast.info("You cannot review your own product.");
+      return;
+    }
+
+    setReviewSubmitting(true);
+
+    try {
+      const token = JSON.parse(localStorage.getItem("auth") || "{}").token;
+      const response = await fetch(`/api/products/${product._id}/reviews`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(reviewForm),
+      });
+      const data = await parseJsonSafely(response, {});
+
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to save review");
+      }
+
+      toast.success("Review saved successfully");
+      setReviewForm({ rating: 5, title: "", comment: "" });
+      await fetchProduct();
+      await fetchReviews();
+    } catch (error) {
+      console.error("Error saving review:", error);
+      toast.error(error.message || "Failed to save review");
+    } finally {
+      setReviewSubmitting(false);
     }
   };
 
@@ -198,6 +295,17 @@ export default function ProductDetail() {
                       {product.stock_quantity > 0 ? `${product.stock_quantity} in stock` : "Made to order"}
                     </Badge>
                   </div>
+                  <div className="mt-3 flex items-center gap-3 text-sm">
+                    <div className="flex items-center gap-1 text-yellow-500">
+                      <Star className="h-4 w-4 fill-current" />
+                      <span className="font-medium text-foreground">
+                        {Number(product.average_rating || 0).toFixed(product.review_count ? 1 : 0)}
+                      </span>
+                    </div>
+                    <span className="text-muted-foreground">
+                      {product.review_count || 0} {product.review_count === 1 ? "review" : "reviews"}
+                    </span>
+                  </div>
                 </div>
 
                 <Button variant="ghost" size="icon">
@@ -255,6 +363,98 @@ export default function ProductDetail() {
                     <p>{product.category}</p>
                   </div>
                 </div>
+              </Card>
+
+              <Card className="p-6">
+                <div className="flex items-center justify-between gap-4 mb-5">
+                  <div>
+                    <h3 className="font-bold text-xl">Ratings & Reviews</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Reviews from verified buyers, similar to marketplace shopping apps.
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-3xl font-bold text-primary">
+                      {Number(product.average_rating || 0).toFixed(product.review_count ? 1 : 0)}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      Based on {product.review_count || 0} {product.review_count === 1 ? "review" : "reviews"}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="border rounded-xl p-4 mb-5 space-y-4">
+                  <div>
+                    <Label className="mb-2 block">Your Rating</Label>
+                    <StarRatingInput
+                      value={reviewForm.rating}
+                      onChange={(rating) => setReviewForm((current) => ({ ...current, rating }))}
+                      disabled={reviewSubmitting}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="review-title">Review Title</Label>
+                    <Input
+                      id="review-title"
+                      placeholder="Summarize your experience"
+                      value={reviewForm.title}
+                      onChange={(event) => setReviewForm((current) => ({ ...current, title: event.target.value }))}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="review-comment">Review</Label>
+                    <Textarea
+                      id="review-comment"
+                      placeholder="Share what you liked about the product, quality, finish, and packaging"
+                      value={reviewForm.comment}
+                      onChange={(event) => setReviewForm((current) => ({ ...current, comment: event.target.value }))}
+                    />
+                  </div>
+                  <Button
+                    variant="hero"
+                    onClick={handleReviewSubmit}
+                    disabled={reviewSubmitting || !user || isOwnProduct}
+                  >
+                    {reviewSubmitting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+                    {isOwnProduct ? "You cannot review your own product" : "Write a Review"}
+                  </Button>
+                  {!user && <p className="text-sm text-muted-foreground">Sign in and purchase the product to add a review.</p>}
+                </div>
+
+                {reviewsLoading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                  </div>
+                ) : reviews.length === 0 ? (
+                  <p className="text-muted-foreground">No reviews yet. Be the first buyer to review this product.</p>
+                ) : (
+                  <div className="space-y-4">
+                    {reviews.map((review) => (
+                      <div key={review._id} className="rounded-xl border p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
+                          <div>
+                            <p className="font-semibold">
+                              {review.user_id?.fullName || review.user_id?.email || "Marketplace buyer"}
+                            </p>
+                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                              <div className="flex items-center gap-1 text-yellow-500">
+                                {[1, 2, 3, 4, 5].map((value) => (
+                                  <Star key={value} className={`h-4 w-4 ${value <= review.rating ? "fill-current" : ""}`} />
+                                ))}
+                              </div>
+                              {review.verified_purchase ? <Badge variant="outline">Verified Purchase</Badge> : null}
+                            </div>
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            {review.updated_at ? new Date(review.updated_at).toLocaleDateString() : ""}
+                          </p>
+                        </div>
+                        {review.title ? <p className="font-medium mb-1">{review.title}</p> : null}
+                        {review.comment ? <p className="text-muted-foreground whitespace-pre-wrap">{review.comment}</p> : null}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </Card>
 
               <div className="flex gap-4">
