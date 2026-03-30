@@ -1,0 +1,93 @@
+import { createContext, useContext, useEffect, useState } from "react";
+
+const AuthContext = createContext(undefined);
+
+const parseJsonSafely = async (response) => {
+  try {
+    return await response.json();
+  } catch {
+    return {};
+  }
+};
+
+export const AuthProvider = ({ children }) => {
+  const [user, setUser] = useState(null);
+  const [token, setToken] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const stored = localStorage.getItem("auth");
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      setUser(parsed.user || null);
+      setToken(parsed.token || null);
+    }
+    setLoading(false);
+  }, []);
+
+  const save = (nextUser, nextToken) => {
+    setUser(nextUser);
+    setToken(nextToken);
+    localStorage.setItem("auth", JSON.stringify({ user: nextUser, token: nextToken }));
+  };
+
+  const signIn = async (email, password) => {
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await parseJsonSafely(response);
+
+      if (response.ok && data.token) {
+        save(data.user, data.token);
+        return { user: data.user };
+      }
+
+      return { error: data.message || "Login failed" };
+    } catch (error) {
+      return { error: error.message || "Login failed" };
+    }
+  };
+
+  const signUp = async (email, password, fullName, userType) => {
+    try {
+      const response = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password, fullName, userType }),
+      });
+      const data = await parseJsonSafely(response);
+
+      if (response.ok && data.token) {
+        save(data.user, data.token);
+        return { user: data.user };
+      }
+
+      return { error: data.message || "Registration failed" };
+    } catch (error) {
+      return { error: error.message || "Registration failed" };
+    }
+  };
+
+  const signOut = () => {
+    setUser(null);
+    setToken(null);
+    localStorage.removeItem("auth");
+  };
+
+  return (
+    <AuthContext.Provider value={{ user, token, signIn, signUp, signOut, loading }}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
+
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (context === undefined) {
+    throw new Error("useAuth must be used within an AuthProvider");
+  }
+  return context;
+};
