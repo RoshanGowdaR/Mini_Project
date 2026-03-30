@@ -103,6 +103,7 @@ def connect_collections():
       "products": db["products"],
       "orders": db["orders"],
       "artisans": db["artisans"],
+      "reviews": db["reviews"],
     }
   except Exception:
     return {
@@ -112,6 +113,7 @@ def connect_collections():
       "products": InMemoryCollection(),
       "orders": InMemoryCollection(),
       "artisans": InMemoryCollection(),
+      "reviews": InMemoryCollection(),
     }
 
 
@@ -121,6 +123,7 @@ users = collections["users"]
 products = collections["products"]
 orders = collections["orders"]
 artisans = collections["artisans"]
+reviews = collections["reviews"]
 
 
 class AuthPayload(BaseModel):
@@ -160,6 +163,12 @@ class OrderPayload(BaseModel):
   total_amount: float
   status: Optional[str] = "pending"
   shipping_address: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ReviewPayload(BaseModel):
+  rating: int = Field(ge=1, le=5)
+  title: Optional[str] = None
+  comment: Optional[str] = None
 
 
 class ChatMessagePayload(BaseModel):
@@ -206,6 +215,13 @@ def serialize_product(product: Dict[str, Any]):
   else:
     artisan_payload = str(artisan_value) if artisan_value else None
 
+  product_reviews = reviews.find({"product_id": product["_id"]})
+  review_count = len(product_reviews)
+  average_rating = round(
+    sum(float(review.get("rating", 0) or 0) for review in product_reviews) / review_count,
+    1,
+  ) if review_count else 0
+
   return {
     "_id": str(product["_id"]),
     "artisan_id": artisan_payload,
@@ -221,6 +237,8 @@ def serialize_product(product: Dict[str, Any]):
     "stock_quantity": product.get("stock_quantity", 0),
     "is_available": product.get("is_available", True),
     "created_at": serialize_datetime(product.get("created_at")),
+    "average_rating": average_rating,
+    "review_count": review_count,
   }
 
 
@@ -266,6 +284,31 @@ def serialize_order(order: Dict[str, Any]):
     "status": order.get("status", "pending"),
     "shipping_address": order.get("shipping_address", {}),
     "created_at": serialize_datetime(order.get("created_at")),
+  }
+
+
+def serialize_review(review: Dict[str, Any]):
+  reviewer_value = review.get("user_id")
+  if isinstance(reviewer_value, dict):
+    reviewer_payload = {
+      "_id": str(reviewer_value.get("_id")),
+      "email": reviewer_value.get("email"),
+      "fullName": reviewer_value.get("fullName"),
+      "role": reviewer_value.get("role"),
+    }
+  else:
+    reviewer_payload = str(reviewer_value) if reviewer_value else None
+
+  return {
+    "_id": str(review["_id"]),
+    "product_id": str(review["product_id"]),
+    "user_id": reviewer_payload,
+    "rating": review["rating"],
+    "title": review.get("title"),
+    "comment": review.get("comment"),
+    "verified_purchase": bool(review.get("verified_purchase", False)),
+    "created_at": serialize_datetime(review.get("created_at")),
+    "updated_at": serialize_datetime(review.get("updated_at")),
   }
 
 
@@ -540,6 +583,14 @@ def attach_artisan_profile_user(artisan: Dict[str, Any]):
   return hydrated
 
 
+def attach_review_user(review: Dict[str, Any]):
+  user_id = to_object_id(review.get("user_id"))
+  reviewer = users.find_one({"_id": user_id}, {"email": 1, "fullName": 1, "role": 1})
+  hydrated = dict(review)
+  hydrated["user_id"] = reviewer or user_id
+  return hydrated
+
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(_: Request, exc: HTTPException):
   return JSONResponse(
@@ -669,6 +720,73 @@ async def get_product(product_id: str):
   if not product:
     raise HTTPException(status_code=404, detail={"message": "Not found"})
   return serialize_product(attach_artisan_user(product))
+
+
+@app.get("/api/products/{product_id}/reviews")
+async def get_product_reviews(product_id: str):
+  object_id = to_object_id(product_id)
+  product = products.find_one({"_id": object_id})
+  if not product:
+    raise HTTPException(status_code=404, detail={"message": "Not found"})
+
+  items = [attach_review_user(review) for review in reviews.find({"product_id": object_id})]
+  items.sort(key=lambda review: str(review.get("updated_at") or review.get("created_at") or ""), reverse=True)
+  return {
+    "reviews": [serialize_review(review) for review in items],
+    "summary": serialize_product(attach_artisan_user(product)),
+  }
+
+
+@app.post("/api/products/{product_id}/reviews")
+async def save_product_review(
+  product_id: str,
+  payload: ReviewPayload,
+  authorization: Optional[str] = Header(default=None),
+):
+  user = require_user(authorization)
+  product_object_id = to_object_id(product_id)
+  user_object_id = to_object_id(user["id"])
+  product = products.find_one({"_id": product_object_id})
+  if not product:
+    raise HTTPException(status_code=404, detail={"message": "Not found"})
+
+  if str(product.get("artisan_id")) == user["id"]:
+    raise HTTPException(status_code=400, detail={"message": "You cannot review your own product"})
+
+  has_purchase = bool(
+    orders.find_one({
+      "buyer_id": user_object_id,
+      "product_id": product_object_id,
+    })
+  )
+  if not has_purchase:
+    raise HTTPException(status_code=400, detail={"message": "Only buyers who purchased this product can review it"})
+
+  now = datetime.utcnow()
+  review_data = {
+    "product_id": product_object_id,
+    "user_id": user_object_id,
+    "rating": payload.rating,
+    "title": (payload.title or "").strip() or None,
+    "comment": (payload.comment or "").strip() or None,
+    "verified_purchase": True,
+    "updated_at": now,
+  }
+
+  existing = reviews.find_one({"product_id": product_object_id, "user_id": user_object_id})
+  if existing:
+    reviews.update_one({"_id": existing["_id"]}, {"$set": review_data})
+    stored = reviews.find_one({"_id": existing["_id"]})
+  else:
+    review_data["created_at"] = now
+    inserted = reviews.insert_one(review_data)
+    stored = reviews.find_one({"_id": inserted.inserted_id})
+
+  return {
+    "message": "Review saved successfully",
+    "review": serialize_review(attach_review_user(stored)),
+    "summary": serialize_product(attach_artisan_user(product)),
+  }
 
 
 @app.put("/api/products/{product_id}")

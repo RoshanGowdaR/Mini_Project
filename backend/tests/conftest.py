@@ -75,11 +75,13 @@ def fake_db(monkeypatch):
     "products": FakeCollection(),
     "orders": FakeCollection(),
     "artisans": FakeCollection(),
+    "reviews": FakeCollection(),
   }
   monkeypatch.setattr(app_module, "users", collections["users"])
   monkeypatch.setattr(app_module, "products", collections["products"])
   monkeypatch.setattr(app_module, "orders", collections["orders"])
   monkeypatch.setattr(app_module, "artisans", collections["artisans"])
+  monkeypatch.setattr(app_module, "reviews", collections["reviews"])
   monkeypatch.setattr(app_module, "jwt_secret", "test-secret")
   return collections
 
