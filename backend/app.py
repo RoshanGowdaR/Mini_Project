@@ -14,7 +14,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from groq import Groq
-from pymongo import MongoClient
+from pymongo import ASCENDING, MongoClient
 from pydantic import BaseModel, Field
 
 
@@ -96,6 +96,15 @@ def connect_collections():
       db_name = mongo_uri.rsplit("/", 1)[-1] or "Ophelia_AI"
       db = client[db_name]
 
+    existing_collections = db.list_collection_names()
+    if "product_reviews" not in existing_collections:
+      db.create_collection("product_reviews")
+
+    product_reviews_collection = db["product_reviews"]
+    product_reviews_collection.create_index([("product_id", ASCENDING)])
+    product_reviews_collection.create_index([("user_id", ASCENDING)])
+    product_reviews_collection.create_index([("product_id", ASCENDING), ("user_id", ASCENDING)], unique=True)
+
     return {
       "mode": "mongo",
       "client": client,
@@ -103,7 +112,7 @@ def connect_collections():
       "products": db["products"],
       "orders": db["orders"],
       "artisans": db["artisans"],
-      "reviews": db["reviews"],
+      "product_reviews": product_reviews_collection,
     }
   except Exception:
     return {
@@ -113,7 +122,7 @@ def connect_collections():
       "products": InMemoryCollection(),
       "orders": InMemoryCollection(),
       "artisans": InMemoryCollection(),
-      "reviews": InMemoryCollection(),
+      "product_reviews": InMemoryCollection(),
     }
 
 
@@ -123,7 +132,7 @@ users = collections["users"]
 products = collections["products"]
 orders = collections["orders"]
 artisans = collections["artisans"]
-reviews = collections["reviews"]
+product_reviews = collections["product_reviews"]
 
 
 class AuthPayload(BaseModel):
@@ -215,10 +224,10 @@ def serialize_product(product: Dict[str, Any]):
   else:
     artisan_payload = str(artisan_value) if artisan_value else None
 
-  product_reviews = reviews.find({"product_id": product["_id"]})
-  review_count = len(product_reviews)
+  product_reviews_list = product_reviews.find({"product_id": product["_id"]})
+  review_count = len(product_reviews_list)
   average_rating = round(
-    sum(float(review.get("rating", 0) or 0) for review in product_reviews) / review_count,
+    sum(float(review.get("rating", 0) or 0) for review in product_reviews_list) / review_count,
     1,
   ) if review_count else 0
 
@@ -729,7 +738,7 @@ async def get_product_reviews(product_id: str):
   if not product:
     raise HTTPException(status_code=404, detail={"message": "Not found"})
 
-  items = [attach_review_user(review) for review in reviews.find({"product_id": object_id})]
+  items = [attach_review_user(review) for review in product_reviews.find({"product_id": object_id})]
   items.sort(key=lambda review: str(review.get("updated_at") or review.get("created_at") or ""), reverse=True)
   return {
     "reviews": [serialize_review(review) for review in items],
@@ -773,14 +782,14 @@ async def save_product_review(
     "updated_at": now,
   }
 
-  existing = reviews.find_one({"product_id": product_object_id, "user_id": user_object_id})
+  existing = product_reviews.find_one({"product_id": product_object_id, "user_id": user_object_id})
   if existing:
-    reviews.update_one({"_id": existing["_id"]}, {"$set": review_data})
-    stored = reviews.find_one({"_id": existing["_id"]})
+    product_reviews.update_one({"_id": existing["_id"]}, {"$set": review_data})
+    stored = product_reviews.find_one({"_id": existing["_id"]})
   else:
     review_data["created_at"] = now
-    inserted = reviews.insert_one(review_data)
-    stored = reviews.find_one({"_id": inserted.inserted_id})
+    inserted = product_reviews.insert_one(review_data)
+    stored = product_reviews.find_one({"_id": inserted.inserted_id})
 
   return {
     "message": "Review saved successfully",

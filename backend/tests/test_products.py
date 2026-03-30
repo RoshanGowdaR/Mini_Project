@@ -93,7 +93,7 @@ def test_get_single_product_includes_review_summary(client, fake_db, create_user
       "category": "Pottery",
     }
   ).inserted_id
-  fake_db["reviews"].insert_one(
+  fake_db["product_reviews"].insert_one(
     {
       "product_id": product_id,
       "user_id": buyer["_id"],
