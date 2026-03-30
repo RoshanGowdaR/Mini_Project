@@ -79,7 +79,7 @@ export default function Analytics() {
             Trend Analytics
           </h1>
           <p className="text-muted-foreground mt-2">
-            View Groq-powered artisan market trends, category movement, and top product opportunities.
+            View Groq-powered real-world art market trends, category movement, and top product opportunities.
           </p>
         </div>
 
@@ -87,7 +87,7 @@ export default function Analytics() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Sparkles className="h-5 w-5 text-primary" />
-              Current Artisan Market Trends
+              Current Art Market Trends
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
@@ -141,7 +141,7 @@ export default function Analytics() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <Card className="border-2 border-primary/20">
             <CardHeader>
-              <CardTitle>Artisan Market Momentum</CardTitle>
+              <CardTitle>Global Art Market Momentum</CardTitle>
             </CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={300}>
@@ -187,7 +187,7 @@ export default function Analytics() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <TrendingUp className="h-5 w-5 text-primary" />
-                Groq Trending Artisan Products
+                Groq Trending Art Market Products
               </CardTitle>
             </CardHeader>
             <CardContent>

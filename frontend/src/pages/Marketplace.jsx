@@ -226,9 +226,14 @@ export default function Marketplace() {
 
                       <div className="flex items-center justify-between mb-4">
                         <div className="text-xl font-bold text-primary">${Number(product.price || 0).toFixed(2)}</div>
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-1 text-sm">
                           <Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />
-                          <span className="text-sm font-medium">4.8</span>
+                          <span className="font-medium">
+                            {Number(product.average_rating || 0).toFixed(product.review_count ? 1 : 0)}
+                          </span>
+                          <span className="text-muted-foreground">
+                            ({product.review_count || 0})
+                          </span>
                         </div>
                       </div>
 
