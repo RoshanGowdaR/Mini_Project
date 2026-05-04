@@ -917,7 +917,28 @@ async def get_admin_auctions(authorization: Optional[str] = Header(default=None)
   require_admin(authorization)
   client = require_supabase()
   response = client.table("auction_items").select("*").order("created_at", desc=True).execute()
-  return response.data or []
+  items = response.data or []
+  
+  # Fetch all relevant users for contact info
+  user_ids = set()
+  for item in items:
+    if item.get("artisan_id"):
+      user_ids.add(item["artisan_id"])
+    if item.get("current_winner_id"):
+      user_ids.add(item["current_winner_id"])
+      
+  user_map = fetch_users_by_ids(list(user_ids)) if user_ids else {}
+  
+  for item in items:
+    if item.get("status") == "ended":
+      artisan = user_map.get(item.get("artisan_id"))
+      if artisan:
+        item["artisan_email"] = artisan.get("email")
+      winner = user_map.get(item.get("current_winner_id"))
+      if winner:
+        item["winner_email"] = winner.get("email")
+        
+  return items
 
 
 @app.post("/api/admin/auctions/{auction_id}/approve")
