@@ -52,6 +52,8 @@ CREATE TABLE IF NOT EXISTS orders (
   total_amount NUMERIC(10,2) NOT NULL,
   status TEXT DEFAULT 'pending',
   shipping_address JSONB DEFAULT '{}',
+  razorpay_order_id TEXT,
+  razorpay_payment_id TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 

@@ -10,6 +10,9 @@ from typing import Any, Dict, List, Optional
 import bcrypt
 import jwt
 import resend
+import razorpay
+import hmac
+import hashlib
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -44,6 +47,13 @@ supabase_service_key = os.getenv("SUPABASE_SERVICE_KEY", "")
 supabase_anon_key = os.getenv("SUPABASE_ANON_KEY", "")
 resend_api_key = os.getenv("RESEND_API_KEY", "")
 admin_secret_key = os.getenv("ADMIN_SECRET_KEY", "secret-admin")
+
+razorpay_key_id = os.getenv("RAZORPAY_KEY_ID", "")
+razorpay_key_secret = os.getenv("RAZORPAY_KEY_SECRET", "")
+if razorpay_key_id and razorpay_key_secret:
+    razorpay_client = razorpay.Client(auth=(razorpay_key_id, razorpay_key_secret))
+else:
+    razorpay_client = None
 
 supabase_client: Optional[Client] = None
 if supabase_url and supabase_service_key:
@@ -1526,6 +1536,83 @@ async def get_artisans(userId: Optional[str] = None):
   user_ids = [row.get("user_id") for row in items if row.get("user_id")]
   user_map = fetch_users_by_ids(user_ids)
   return [serialize_artisan(row, user_map=user_map) for row in items]
+
+
+@app.post("/api/orders/create-razorpay-order")
+async def create_razorpay_order(payload: OrderPayload, authorization: Optional[str] = Header(default=None)):
+  user = require_user(authorization)
+  client = require_supabase()
+  
+  if not razorpay_client:
+      raise HTTPException(status_code=500, detail={"message": "Razorpay not configured"})
+      
+  # Calculate total amount
+  total_amount = float(payload.total_amount)
+  amount_in_paise = int(total_amount * 100)
+  
+  try:
+      order_data = {
+          "amount": amount_in_paise,
+          "currency": "INR",
+          "receipt": str(uuid.uuid4())
+      }
+      razorpay_order = razorpay_client.order.create(data=order_data)
+      return {
+          "order_id": razorpay_order["id"],
+          "amount": razorpay_order["amount"],
+          "currency": razorpay_order["currency"],
+          "key_id": razorpay_key_id,
+      }
+  except Exception as e:
+      raise HTTPException(status_code=500, detail={"message": f"Failed to create Razorpay order: {str(e)}"})
+
+
+class RazorpayVerificationPayload(BaseModel):
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
+    product_id: str
+    quantity: int
+    total_amount: float
+    shipping_address: dict
+
+@app.post("/api/orders/verify-payment")
+async def verify_payment(payload: RazorpayVerificationPayload, authorization: Optional[str] = Header(default=None)):
+    user = require_user(authorization)
+    client = require_supabase()
+    
+    if not razorpay_client:
+        raise HTTPException(status_code=500, detail={"message": "Razorpay not configured"})
+        
+    try:
+        # Verify signature
+        params_dict = {
+            'razorpay_order_id': payload.razorpay_order_id,
+            'razorpay_payment_id': payload.razorpay_payment_id,
+            'razorpay_signature': payload.razorpay_signature
+        }
+        razorpay_client.utility.verify_payment_signature(params_dict)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail={"message": "Invalid payment signature"})
+        
+    # Signature is valid, create the order in Supabase
+    document = {
+        "buyer_id": user["id"],
+        "product_id": payload.product_id,
+        "quantity": payload.quantity,
+        "total_amount": payload.total_amount,
+        "status": "paid",
+        "shipping_address": payload.shipping_address,
+        "razorpay_order_id": payload.razorpay_order_id,
+        "razorpay_payment_id": payload.razorpay_payment_id,
+        "created_at": datetime.utcnow().isoformat()
+    }
+    
+    response = client.table("orders").insert(document).execute()
+    order = (response.data or [None])[0]
+    if not order:
+        raise HTTPException(status_code=500, detail={"message": "Order insertion failed"})
+    return serialize_order(order)
 
 
 @app.post("/api/orders")
