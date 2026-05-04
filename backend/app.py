@@ -590,6 +590,34 @@ def generate_groq_completion(
     return None
 
 
+def get_cached_or_fetch(cache_key: str, prompt: str, temperature: float = 0.4, model: Optional[str] = None):
+  client = require_supabase()
+  # 1. Query Supabase cache
+  response = client.table("groq_cache").select("response").eq("cache_key", cache_key).gte("created_at", (datetime.utcnow() - timedelta(hours=1)).isoformat()).execute()
+  if response.data and len(response.data) > 0:
+    return response.data[0]["response"]
+      
+  # 2. Cache miss, call Groq API
+  try:
+    messages = json.loads(prompt)
+  except Exception:
+    messages = [{"role": "user", "content": prompt}]
+      
+  fresh_response = generate_groq_completion(messages, temperature=temperature, model=model)
+  if not fresh_response:
+    return None
+      
+  # 3. Upsert into cache
+  upsert_data = {
+    "cache_key": cache_key,
+    "response": fresh_response,
+    "created_at": datetime.utcnow().isoformat()
+  }
+  client.table("groq_cache").upsert(upsert_data, on_conflict="cache_key").execute()
+  
+  return fresh_response
+
+
 def extract_json_payload(raw: str):
   if not raw:
     return None
@@ -660,8 +688,7 @@ def generate_market_trends():
     "Focus on broader market movement across ceramics, textiles, jewelry, paintings, folk art, decor, gifting, and premium handmade products. "
     "Give a concise current market analysis with the strongest categories, buyer demand signals, likely top-trending product types, and a simple 6-point momentum view."
   )
-  raw_market_report = generate_groq_completion(
-    [
+  messages = [
       {"role": "system", "content": live_market_prompt},
       {
         "role": "user",
@@ -672,7 +699,12 @@ def generate_market_trends():
           }
         ),
       },
-    ],
+    ]
+  prompt_str = json.dumps(messages)
+  cache_key = hashlib.md5(prompt_str.encode()).hexdigest()
+  raw_market_report = get_cached_or_fetch(
+    cache_key=cache_key,
+    prompt=prompt_str,
     temperature=0.3,
     model=groq_market_model,
   )
@@ -691,11 +723,15 @@ def generate_market_trends():
     "trending_products is an array of up to 5 objects with keys name and score. "
     "Do not include markdown, explanation, or code fences."
   )
-  normalized = generate_groq_completion(
-    [
+  norm_messages = [
       {"role": "system", "content": normalization_prompt},
       {"role": "user", "content": raw_market_report},
-    ],
+    ]
+  norm_prompt_str = json.dumps(norm_messages)
+  norm_cache_key = hashlib.md5(norm_prompt_str.encode()).hexdigest()
+  normalized = get_cached_or_fetch(
+    cache_key=norm_cache_key,
+    prompt=norm_prompt_str,
     temperature=0.1,
   )
 
@@ -713,11 +749,15 @@ def generate_market_trends():
     "trending_products must contain up to 5 objects with keys name and score representing current real-world trending handmade product types. "
     "Do not include markdown or explanations."
   )
-  chart_raw = generate_groq_completion(
-    [
+  chart_messages = [
       {"role": "system", "content": chart_prompt},
       {"role": "user", "content": raw_market_report},
-    ],
+    ]
+  chart_prompt_str = json.dumps(chart_messages)
+  chart_cache_key = hashlib.md5(chart_prompt_str.encode()).hexdigest()
+  chart_raw = get_cached_or_fetch(
+    cache_key=chart_cache_key,
+    prompt=chart_prompt_str,
     temperature=0.15,
   )
   chart_data = extract_json_payload(chart_raw or "") or {}
@@ -745,8 +785,7 @@ def generate_artisan_recommendations(user_id: str):
     "Use the artisan profile and current market data. Return valid JSON with one key: "
     "recommendations, which must be an array of exactly 5 concise recommendation strings."
   )
-  raw = generate_groq_completion(
-    [
+  messages = [
       {"role": "system", "content": prompt},
       {
         "role": "user",
@@ -757,7 +796,12 @@ def generate_artisan_recommendations(user_id: str):
           }
         ),
       },
-    ],
+    ]
+  prompt_str = json.dumps(messages)
+  cache_key = hashlib.md5(prompt_str.encode()).hexdigest()
+  raw = get_cached_or_fetch(
+    cache_key=cache_key,
+    prompt=prompt_str,
     temperature=0.35,
   )
 
@@ -1639,3 +1683,74 @@ async def get_orders(authorization: Optional[str] = Header(default=None)):
   product_rows = client.table("products").select("*").in_("id", product_ids).execute().data if product_ids else []
   product_map = {row.get("id"): row for row in (product_rows or [])}
   return [serialize_order(row, product_map=product_map) for row in order_rows]
+
+
+@app.get("/api/artisans/orders")
+async def get_artisan_orders(authorization: Optional[str] = Header(default=None)):
+  user = require_user(authorization)
+  if user.get("role") != "artisan":
+    raise HTTPException(status_code=403, detail={"message": "Only artisans can view these orders"})
+
+  client = require_supabase()
+  # 1. Fetch all products belonging to this artisan
+  product_rows = client.table("products").select("id, title, price, category").eq("artisan_id", user["id"]).execute().data or []
+  if not product_rows:
+      return []
+  
+  product_ids = [p["id"] for p in product_rows]
+  product_map = {p["id"]: p for p in product_rows}
+  
+  # 2. Fetch all orders for those products
+  order_rows = client.table("orders").select("*").in_("product_id", product_ids).order("created_at", desc=True).execute().data or []
+  
+  # 3. Fetch buyer names
+  buyer_ids = [o["buyer_id"] for o in order_rows if o.get("buyer_id")]
+  buyer_map = fetch_users_by_ids(buyer_ids)
+  
+  # 4. Serialize
+  results = []
+  for order in order_rows:
+      serialized = serialize_order(order)
+      # Embed product info
+      serialized["product"] = product_map.get(order.get("product_id"))
+      # Embed buyer info
+      buyer = buyer_map.get(order.get("buyer_id"))
+      serialized["buyer_name"] = buyer.get("full_name") or buyer.get("email") if buyer else "Unknown Buyer"
+      results.append(serialized)
+      
+  return results
+
+
+class OrderStatusUpdatePayload(BaseModel):
+    status: str
+
+@app.patch("/api/artisans/orders/{order_id}/status")
+async def update_artisan_order_status(order_id: str, payload: OrderStatusUpdatePayload, authorization: Optional[str] = Header(default=None)):
+    user = require_user(authorization)
+    if user.get("role") != "artisan":
+        raise HTTPException(status_code=403, detail={"message": "Only artisans can update order status"})
+        
+    client = require_supabase()
+    
+    # 1. Fetch the order
+    order_rows = client.table("orders").select("*").eq("id", order_id).execute().data or []
+    if not order_rows:
+        raise HTTPException(status_code=404, detail={"message": "Order not found"})
+    order = order_rows[0]
+    
+    # 2. Validate product ownership
+    product_rows = client.table("products").select("artisan_id").eq("id", order["product_id"]).execute().data or []
+    if not product_rows or product_rows[0].get("artisan_id") != user["id"]:
+        raise HTTPException(status_code=403, detail={"message": "You cannot update an order for a product you don't own"})
+        
+    # 3. Update status
+    valid_statuses = ["pending", "confirmed", "shipped", "delivered"]
+    if payload.status not in valid_statuses:
+        raise HTTPException(status_code=400, detail={"message": f"Invalid status. Must be one of {valid_statuses}"})
+        
+    response = client.table("orders").update({"status": payload.status}).eq("id", order_id).execute()
+    updated_order = (response.data or [None])[0]
+    if not updated_order:
+        raise HTTPException(status_code=500, detail={"message": "Failed to update order"})
+        
+    return serialize_order(updated_order)
