@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS products (
   images JSONB DEFAULT '[]',
   stock_quantity INTEGER DEFAULT 0,
   is_available BOOLEAN DEFAULT TRUE,
+  average_rating NUMERIC(3,2) DEFAULT 0.0,
+  review_count INTEGER DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 

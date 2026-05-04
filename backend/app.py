@@ -14,7 +14,7 @@ import razorpay
 import hmac
 import hashlib
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from groq import Groq
@@ -1386,6 +1386,52 @@ async def get_artisan_recommendations(authorization: Optional[str] = Header(defa
   return generate_artisan_recommendations(user["id"])
 
 
+@app.post("/api/products/upload-images")
+async def upload_product_images(
+    files: List[UploadFile] = File(...),
+    authorization: Optional[str] = Header(default=None)
+):
+    user = require_user(authorization)
+    if user.get("role") != "artisan":
+        raise HTTPException(status_code=403, detail={"message": "Only artisans can upload product images"})
+        
+    client = require_supabase()
+    
+    if len(files) > 8:
+        raise HTTPException(status_code=400, detail={"message": "Maximum 8 files allowed"})
+        
+    uploaded_urls = []
+    
+    for file in files:
+        if file.content_type not in ["image/jpeg", "image/png", "image/webp"]:
+            raise HTTPException(status_code=400, detail={"message": "Only JPEG, PNG, and WEBP formats are allowed"})
+            
+        file.file.seek(0, 2)
+        size = file.file.tell()
+        file.file.seek(0)
+        
+        if size > 5 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail={"message": "File size must be under 5MB"})
+            
+        file_bytes = file.file.read()
+        file_ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
+        file_path = f"{user['id']}/{uuid.uuid4()}.{file_ext}"
+        
+        try:
+            client.storage.from_("product-images").upload(
+                file_path, 
+                file_bytes, 
+                file_options={"content-type": file.content_type}
+            )
+            public_url = client.storage.from_("product-images").get_public_url(file_path)
+            uploaded_urls.append(public_url)
+        except Exception as e:
+            print("Upload failed:", e)
+            raise HTTPException(status_code=500, detail={"message": "Failed to upload image"})
+            
+    return {"image_urls": uploaded_urls}
+
+
 @app.post("/api/products")
 async def create_product(payload: ProductPayload, authorization: Optional[str] = Header(default=None)):
   user = require_user(authorization)
@@ -1488,10 +1534,21 @@ async def save_product_review(
   reviewer_map = fetch_users_by_ids([user["id"]])
   artisan_map = fetch_users_by_ids([product.get("artisan_id")])
   review_summary = fetch_review_summary([product_id])
+  
+  # Update product table with aggregated values
+  prod_summary = review_summary.get(product_id, {"count": 0, "sum": 0.0})
+  count = prod_summary["count"]
+  avg = prod_summary["sum"] / count if count > 0 else 0.0
+  client.table("products").update({"review_count": count, "average_rating": round(avg, 2)}).eq("id", product_id).execute()
+  
+  # Fetch fresh product row to return
+  fresh_product_rows = client.table("products").select("*").eq("id", product_id).execute().data or []
+  fresh_product = fresh_product_rows[0] if fresh_product_rows else product
+  
   return {
     "message": "Review saved successfully",
     "review": serialize_review(stored, user_map=reviewer_map),
-    "summary": serialize_product(product, artisan_map=artisan_map, review_summary=review_summary),
+    "summary": serialize_product(fresh_product, artisan_map=artisan_map, review_summary=review_summary),
   }
 
 
