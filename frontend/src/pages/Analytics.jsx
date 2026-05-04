@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Bar,
@@ -15,12 +15,14 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { Sparkles, TrendingUp } from "lucide-react";
+import { RefreshCw, Sparkles, TrendingUp } from "lucide-react";
 
 import { useAuth } from "@/hooks/useAuth";
+import { useMarketTrends } from "@/hooks/useMarketTrends";
 import Navigation from "@/components/Navigation";
 import Footer from "@/components/Footer";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 
 const COLORS = ["#8B4513", "#D2691E", "#CD853F", "#DEB887", "#F4A460"];
 
@@ -35,39 +37,31 @@ const defaultTrendData = {
   trending_products: [],
 };
 
-const parseJsonSafely = async (response, fallback) => {
-  try {
-    return await response.json();
-  } catch {
-    return fallback;
-  }
-};
-
 export default function Analytics() {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
-  const [marketTrends, setMarketTrends] = useState(defaultTrendData);
+  const { data: marketTrends, isRefreshing, lastUpdated, refresh } = useMarketTrends(defaultTrendData);
+  const [fadeIn, setFadeIn] = useState(true);
 
   useEffect(() => {
-    if (!user) {
+    if (!authLoading && !user) {
       navigate("/auth");
       return;
     }
-    fetchAnalytics();
-  }, [user, navigate]);
+  }, [user, authLoading, navigate]);
 
-  const fetchAnalytics = async () => {
-    try {
-      const response = await fetch("/api/ai/market-trends");
-      const data = await parseJsonSafely(response, defaultTrendData);
+  useEffect(() => {
+    setFadeIn(false);
+    const timeoutId = setTimeout(() => setFadeIn(true), 10);
+    return () => clearTimeout(timeoutId);
+  }, [marketTrends]);
 
-      if (response.ok) {
-        setMarketTrends({ ...defaultTrendData, ...data });
-      }
-    } catch (error) {
-      console.error("Error fetching analytics:", error);
-    }
-  };
+  const lastUpdatedLabel = useMemo(() => {
+    if (!lastUpdated) return "Last updated: never";
+    const minutesAgo = Math.floor((Date.now() - lastUpdated) / 60000);
+    if (minutesAgo <= 1) return "Last updated: just now";
+    return `Last updated: ${minutesAgo} minutes ago`;
+  }, [lastUpdated]);
 
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-b from-background to-accent/10">
@@ -83,12 +77,21 @@ export default function Analytics() {
           </p>
         </div>
 
-        <Card className="border-2 border-primary/20 mb-8 bg-gradient-to-r from-primary/5 to-accent/10">
+        <Card className={`border-2 border-primary/20 mb-8 bg-gradient-to-r from-primary/5 to-accent/10 transition-opacity duration-300 ${fadeIn ? "opacity-100" : "opacity-0"}`}>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-primary" />
-              Current Art Market Trends
-            </CardTitle>
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <CardTitle className="flex items-center gap-2">
+                <Sparkles className="h-5 w-5 text-primary" />
+                Current Art Market Trends
+              </CardTitle>
+              <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+                <span>{lastUpdatedLabel}</span>
+                <Button type="button" variant="hero" className="h-9 px-4" onClick={refresh} disabled={isRefreshing}>
+                  <RefreshCw className="w-4 h-4 mr-2" />
+                  Refresh Analytics
+                </Button>
+              </div>
+            </div>
           </CardHeader>
           <CardContent className="space-y-6">
             <div>

@@ -120,6 +120,17 @@ export default function Marketplace() {
             <p className="text-xl text-muted-foreground">
               Explore artisan-made products and open any item for a full quick-view popup.
             </p>
+            {user?.role === "artisan" && (
+              <div className="flex flex-wrap justify-center gap-3 mt-6">
+                <Button variant="hero" onClick={() => navigate("/upload-product")}>
+                  Upload Product
+                </Button>
+                <Button variant="outline" onClick={() => navigate("/artisan-dashboard?tab=auctions")}
+                >
+                  Auction Hub
+                </Button>
+              </div>
+            )}
           </div>
 
           <div className="max-w-3xl mx-auto">

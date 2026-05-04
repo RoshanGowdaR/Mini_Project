@@ -170,3 +170,62 @@ All colors MUST be HSL.
     @apply bg-card/80 backdrop-blur-xl border border-border/50;
   }
 }
+
+.confetti-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 50;
+}
+
+.confetti-piece {
+  position: absolute;
+  top: -12px;
+  width: 10px;
+  height: 16px;
+  background: hsl(var(--accent));
+  border-radius: 2px;
+  animation: confetti-fall 2.6s ease-in forwards;
+}
+
+.confetti-piece:nth-child(3n) {
+  background: hsl(var(--primary));
+}
+
+.confetti-piece:nth-child(4n) {
+  background: hsl(var(--primary-glow));
+}
+
+.bid-entry {
+  padding: 0.35rem 0.5rem;
+  border-radius: 0.5rem;
+  transition: background-color 0.3s ease;
+}
+
+.bid-entry--new {
+  background-color: hsl(var(--accent) / 0.12);
+  animation: bid-slide-in 0.35s ease-out;
+}
+
+@keyframes confetti-fall {
+  0% {
+    transform: translateY(0) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(110vh) rotate(720deg);
+    opacity: 0;
+  }
+}
+
+@keyframes bid-slide-in {
+  0% {
+    transform: translateX(12px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}

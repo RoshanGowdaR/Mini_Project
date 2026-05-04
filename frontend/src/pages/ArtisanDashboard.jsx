@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   ArrowRight,
@@ -8,6 +8,7 @@ import {
   Loader2,
   Package,
   Plus,
+  RefreshCw,
   Sparkles,
   TrendingUp,
   Trash2,
@@ -23,8 +24,12 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/hooks/useAuth";
+import { useMarketTrends } from "@/hooks/useMarketTrends";
 
 const COLORS = ["#8B4513", "#D2691E", "#CD853F", "#DEB887", "#F4A460"];
 
@@ -57,8 +62,18 @@ export default function ArtisanDashboard() {
   const [hasArtisanProfile, setHasArtisanProfile] = useState(false);
   const [products, setProducts] = useState([]);
   const [selectedProduct, setSelectedProduct] = useState(null);
-  const [trendData, setTrendData] = useState(defaultTrendData);
+  const { data: trendData, isRefreshing, lastUpdated, refresh } = useMarketTrends(defaultTrendData);
   const [recommendations, setRecommendations] = useState([]);
+  const [auctionRequests, setAuctionRequests] = useState([]);
+  const [auctionForm, setAuctionForm] = useState({
+    title: "",
+    description: "",
+    story: "",
+    starting_bid: "",
+    images: [],
+    product_id: "",
+  });
+  const [fadeIn, setFadeIn] = useState(true);
 
   const activeTab = searchParams.get("tab") || "trending";
 
@@ -73,6 +88,19 @@ export default function ArtisanDashboard() {
       fetchDashboardData();
     }
   }, [user]);
+
+  useEffect(() => {
+    setFadeIn(false);
+    const timeoutId = setTimeout(() => setFadeIn(true), 10);
+    return () => clearTimeout(timeoutId);
+  }, [trendData]);
+
+  const lastUpdatedLabel = useMemo(() => {
+    if (!lastUpdated) return "Last updated: never";
+    const minutesAgo = Math.floor((Date.now() - lastUpdated) / 60000);
+    if (minutesAgo <= 1) return "Last updated: just now";
+    return `Last updated: ${minutesAgo} minutes ago`;
+  }, [lastUpdated]);
 
   const setTab = (tab) => {
     setSearchParams({ tab });
@@ -98,13 +126,18 @@ export default function ArtisanDashboard() {
         throw new Error(profileData.message || "Failed to fetch artisan profile");
       }
 
-      const [productsRes, trendsRes, recommendationsRes] = await Promise.allSettled([
-        fetch(`/api/products?artisan_id=${user.id}`),
-        fetch("/api/ai/market-trends"),
+      const fetchPromises = [
+        profileRes.ok
+          ? fetch(`/api/products?artisan_id=${user.id}`)
+          : Promise.resolve(new Response(JSON.stringify([]), { status: 200 })),
         fetch("/api/ai/recommendations", {
           headers: { Authorization: `Bearer ${token}` },
         }),
-      ]);
+        fetch("/api/artisans/bid-requests", {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      ];
+      const [productsRes, recommendationsRes, auctionRes] = await Promise.allSettled(fetchPromises);
 
       if (productsRes.status === "fulfilled") {
         const productData = await parseJsonSafely(productsRes.value, []);
@@ -119,17 +152,17 @@ export default function ArtisanDashboard() {
         toast.error("Failed to load products");
       }
 
-      if (trendsRes.status === "fulfilled") {
-        const trends = await parseJsonSafely(trendsRes.value, defaultTrendData);
-        if (trendsRes.value.ok) {
-          setTrendData({ ...defaultTrendData, ...trends });
-        }
-      }
-
       if (recommendationsRes.status === "fulfilled") {
         const recommendationData = await parseJsonSafely(recommendationsRes.value, { recommendations: [] });
         if (recommendationsRes.value.ok) {
           setRecommendations(recommendationData.recommendations || []);
+        }
+      }
+
+      if (auctionRes.status === "fulfilled") {
+        const auctionData = await parseJsonSafely(auctionRes.value, []);
+        if (auctionRes.value.ok) {
+          setAuctionRequests(Array.isArray(auctionData) ? auctionData : []);
         }
       }
     } catch (error) {
@@ -174,6 +207,51 @@ export default function ArtisanDashboard() {
     } catch (error) {
       console.error("Error refreshing recommendations:", error);
       toast.error(error.message || "Failed to refresh recommendations");
+    }
+  };
+
+  const handleAuctionImageUpload = (event) => {
+    const files = Array.from(event.target.files || []);
+    if (!files.length) return;
+    const readers = files.slice(0, 5).map((file) => {
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.readAsDataURL(file);
+      });
+    });
+    Promise.all(readers).then((images) => {
+      setAuctionForm((prev) => ({ ...prev, images }));
+    });
+  };
+
+  const submitAuctionRequest = async () => {
+    try {
+      const token = JSON.parse(localStorage.getItem("auth") || "{}").token;
+      const response = await fetch("/api/artisans/bid-requests", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          title: auctionForm.title,
+          description: auctionForm.description,
+          story: auctionForm.story,
+          images: auctionForm.images,
+          starting_bid: Number(auctionForm.starting_bid),
+          product_id: auctionForm.product_id || null,
+        }),
+      });
+      const data = await parseJsonSafely(response, {});
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to submit request");
+      }
+      toast.success("Auction request submitted");
+      setAuctionForm({ title: "", description: "", story: "", starting_bid: "", images: [], product_id: "" });
+      fetchDashboardData();
+    } catch (error) {
+      toast.error(error.message || "Failed to submit auction request");
     }
   };
 
@@ -256,10 +334,11 @@ export default function ArtisanDashboard() {
           </div>
 
           <Tabs value={activeTab} onValueChange={setTab} className="space-y-6">
-            <TabsList className="grid w-full grid-cols-3 max-w-lg">
+            <TabsList className="grid w-full grid-cols-4 max-w-xl">
               <TabsTrigger value="products">Products</TabsTrigger>
               <TabsTrigger value="analytics">Analytics</TabsTrigger>
               <TabsTrigger value="trending">Trending</TabsTrigger>
+              <TabsTrigger value="auctions">Auction Hub</TabsTrigger>
             </TabsList>
 
             <TabsContent value="products" className="space-y-6">
@@ -409,7 +488,7 @@ export default function ArtisanDashboard() {
             </TabsContent>
 
             <TabsContent value="trending" className="space-y-6">
-              <Card className="p-8 border-2 border-primary/20">
+              <Card className={`p-8 border-2 border-primary/20 transition-opacity duration-300 ${fadeIn ? "opacity-100" : "opacity-0"}`}>
                 <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between mb-6">
                   <div>
                     <h2 className="text-2xl font-bold">Trending</h2>
@@ -421,12 +500,18 @@ export default function ArtisanDashboard() {
                         Complete Setup
                       </Button>
                     )}
+                    <Button variant="outline" onClick={refresh} disabled={isRefreshing}>
+                      <RefreshCw className="w-4 h-4 mr-2" />
+                      Refresh Analytics
+                    </Button>
                     <Button variant="hero" onClick={refreshRecommendations}>
                       <Sparkles className="w-4 h-4 mr-2" />
                       Recommend Me
                     </Button>
                   </div>
                 </div>
+
+                <div className="text-xs text-muted-foreground mb-6">{lastUpdatedLabel}</div>
 
                 <div className="grid md:grid-cols-2 gap-6 mb-8">
                   <div>
@@ -504,6 +589,87 @@ export default function ArtisanDashboard() {
                     ))}
                   </ul>
                 </div>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="auctions" className="space-y-6">
+              <Card className="p-8 border-2 border-primary/20 space-y-6">
+                <div>
+                  <h2 className="text-2xl font-bold">Submit for Auction</h2>
+                  <p className="text-muted-foreground">Request approval to list a product in live auctions.</p>
+                </div>
+
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div>
+                    <Label>Title</Label>
+                    <Input value={auctionForm.title} onChange={(event) => setAuctionForm({ ...auctionForm, title: event.target.value })} />
+                  </div>
+                  <div>
+                    <Label>Starting Bid</Label>
+                    <Input type="number" value={auctionForm.starting_bid} onChange={(event) => setAuctionForm({ ...auctionForm, starting_bid: event.target.value })} />
+                  </div>
+                  <div className="md:col-span-2">
+                    <Label>Description</Label>
+                    <Textarea value={auctionForm.description} onChange={(event) => setAuctionForm({ ...auctionForm, description: event.target.value })} />
+                  </div>
+                  <div className="md:col-span-2">
+                    <Label>Story</Label>
+                    <Textarea value={auctionForm.story} onChange={(event) => setAuctionForm({ ...auctionForm, story: event.target.value })} />
+                  </div>
+                  <div className="md:col-span-2">
+                    <Label>Images (max 5)</Label>
+                    <Input type="file" multiple accept="image/*" onChange={handleAuctionImageUpload} />
+                  </div>
+                  <div className="md:col-span-2">
+                    <Label>Link to Existing Product (optional)</Label>
+                    <select
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      value={auctionForm.product_id}
+                      onChange={(event) => setAuctionForm({ ...auctionForm, product_id: event.target.value })}
+                    >
+                      <option value="">Select a product</option>
+                      {products.map((product) => (
+                        <option key={product._id} value={product._id}>
+                          {product.title}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <Button variant="hero" onClick={submitAuctionRequest}>
+                  Submit for Auction
+                </Button>
+              </Card>
+
+              <Card className="p-8 border-2 border-primary/20 space-y-4">
+                <div>
+                  <h2 className="text-2xl font-bold">My Auction Requests</h2>
+                  <p className="text-muted-foreground">Track approval and schedule status for your requests.</p>
+                </div>
+                {auctionRequests.length === 0 ? (
+                  <p className="text-muted-foreground">No auction requests yet.</p>
+                ) : (
+                  <div className="grid md:grid-cols-2 gap-4">
+                    {auctionRequests.map((request) => (
+                      <Card key={request.id} className="p-4">
+                        <div className="flex items-center justify-between">
+                          <h3 className="font-semibold">{request.title}</h3>
+                          <Badge>{request.status}</Badge>
+                        </div>
+                        <p className="text-sm text-muted-foreground">Submitted: {new Date(request.created_at).toLocaleString()}</p>
+                        {request.status === "rejected" && request.admin_notes && (
+                          <p className="text-xs text-red-500 mt-2">Reason: {request.admin_notes}</p>
+                        )}
+                        {request.status === "live" && (
+                          <Button className="mt-3" onClick={() => navigate(`/auctions/${request.id}`)}>
+                            View Live Auction
+                          </Button>
+                        )}
+                      </Card>
+                    ))}
+                  </div>
+                )}
               </Card>
             </TabsContent>
           </Tabs>
