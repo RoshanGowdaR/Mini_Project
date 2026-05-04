@@ -1093,7 +1093,7 @@ async def get_public_auctions():
 
 
 @app.get("/api/auctions/{auction_id}")
-async def get_auction_detail(auction_id: str):
+async def get_auction_detail(auction_id: str, authorization: Optional[str] = Header(default=None)):
   client = require_supabase()
   auction = client.table("auction_items").select("*").eq("id", auction_id).execute().data
   bids = client.table("auction_bids").select("*").eq("auction_id", auction_id).order("placed_at", desc=True).execute().data
@@ -1101,12 +1101,67 @@ async def get_auction_detail(auction_id: str):
   if not auction:
     raise HTTPException(status_code=404, detail={"message": "Auction not found"})
   item = auction[0]
+
+  winner_email = None
+  artisan_email = None
+  if item.get("status") == "ended" and authorization:
+    try:
+      # Try as normal user
+      user = None
+      try:
+        user = require_user(authorization)
+      except Exception:
+        pass
+      
+      # Try as admin
+      is_admin = False
+      try:
+        require_admin(authorization)
+        is_admin = True
+      except Exception:
+        pass
+
+      user_id = user.get("id") if user else None
+      
+      if is_admin or user_id == item.get("artisan_id"):
+        if item.get("current_winner_id"):
+          winner_db = fetch_user_by_id(item.get("current_winner_id"))
+          if winner_db:
+            winner_email = winner_db.get("email")
+      
+      if is_admin or user_id == item.get("current_winner_id"):
+        if item.get("artisan_id"):
+          artisan_db = fetch_user_by_id(item.get("artisan_id"))
+          if artisan_db:
+            artisan_email = artisan_db.get("email")
+    except Exception:
+      pass
+
+  if winner_email:
+    item["winner_email"] = winner_email
+  if artisan_email:
+    item["artisan_email"] = artisan_email
+
   return {
     "auction": item,
     "bids": bids or [],
     "registration_count": len(registrations or []),
     "accepts_registration": item.get("status") == "scheduled",
   }
+
+@app.get("/api/auctions/won")
+async def get_won_auctions(authorization: Optional[str] = Header(default=None)):
+  user = require_user(authorization)
+  client = require_supabase()
+  response = client.table("auction_items").select("*").eq("current_winner_id", user.get("id")).eq("status", "ended").order("actual_end", desc=True).execute()
+  
+  items = response.data or []
+  for item in items:
+    artisan_db = fetch_user_by_id(item.get("artisan_id")) if item.get("artisan_id") else None
+    if artisan_db:
+      item["artisan_email"] = artisan_db.get("email")
+      
+  return items
 
 
 @app.post("/api/auctions/{auction_id}/register")
