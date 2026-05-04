@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { LogOut, Menu, Sparkles, User } from "lucide-react";
+import { Gavel, LogOut, Menu, Sparkles, User } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 
@@ -27,6 +27,24 @@ const Navigation = () => {
     closeMenu();
   };
 
+  const [liveAuction, setLiveAuction] = useState(false);
+
+  useEffect(() => {
+    const checkLive = async () => {
+      try {
+        const response = await fetch("/api/auctions");
+        const data = await response.json().catch(() => []);
+        if (response.ok && Array.isArray(data)) {
+          setLiveAuction(data.some((item) => item.status === "live"));
+        }
+      } catch {
+        setLiveAuction(false);
+      }
+    };
+
+    checkLive();
+  }, []);
+
   const navItems = [
     {
       label: t("nav.features"),
@@ -42,6 +60,14 @@ const Navigation = () => {
         navigate("/marketplace");
         closeMenu();
       },
+    },
+    {
+      label: "Auctions",
+      onClick: () => {
+        navigate("/auctions");
+        closeMenu();
+      },
+      icon: <Gavel className="w-4 h-4" />,
     },
   ];
 
@@ -81,9 +107,16 @@ const Navigation = () => {
                 key={item.label}
                 type="button"
                 onClick={item.onClick}
-                className="text-foreground hover:text-primary transition-smooth font-medium"
+                className="text-foreground hover:text-primary transition-smooth font-medium flex items-center gap-2"
               >
+                {item.icon}
                 {item.label}
+                {item.label === "Auctions" && liveAuction && (
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
+                  </span>
+                )}
               </button>
             ))}
           </div>
@@ -128,9 +161,16 @@ const Navigation = () => {
                   key={item.label}
                   type="button"
                   onClick={item.onClick}
-                  className="text-left text-foreground hover:text-primary transition-smooth font-medium py-2"
+                  className="text-left text-foreground hover:text-primary transition-smooth font-medium py-2 flex items-center gap-2"
                 >
+                  {item.icon}
                   {item.label}
+                  {item.label === "Auctions" && liveAuction && (
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75" />
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
+                    </span>
+                  )}
                 </button>
               ))}
 

@@ -10,12 +10,17 @@ import Analytics from "./pages/Analytics";
 import ArtisanDashboard from "./pages/ArtisanDashboard";
 import ArtisanSetup from "./pages/ArtisanSetup";
 import Auth from "./pages/Auth";
+import AuctionRoom from "./pages/AuctionRoom";
+import Auctions from "./pages/Auctions";
 import Index from "./pages/Index";
 import Marketplace from "./pages/Marketplace";
 import NotFound from "./pages/NotFound";
 import ProductDetail from "./pages/ProductDetail";
 import Profile from "./pages/Profile";
-import UploadProduct from "./pages/UploadProduct";
+import UploadProduct from "./pages/UploadProduct.jsx";
+import AdminRoute from "./components/AdminRoute";
+import AdminLogin from "./pages/admin/AdminLogin";
+import AdminDashboard from "./pages/admin/AdminDashboard";
 
 const queryClient = new QueryClient();
 
@@ -37,6 +42,11 @@ const App = () => (
             <Route path="/upload-product" element={<UploadProduct />} />
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/profile" element={<Profile />} />
+            <Route path="/auctions" element={<Auctions />} />
+            <Route path="/auctions/:auction_id" element={<AuctionRoom />} />
+            <Route path="/admin/login" element={<AdminLogin />} />
+            <Route path="/admin" element={<AdminRoute><AdminDashboard /></AdminRoute>} />
+            <Route path="/admin/*" element={<AdminRoute><AdminDashboard /></AdminRoute>} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>

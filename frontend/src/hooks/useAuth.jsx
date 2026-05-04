@@ -40,12 +40,17 @@ export const AuthProvider = ({ children }) => {
       });
       const data = await parseJsonSafely(response);
 
+      if (response.ok && data.admin_login && data.admin_token) {
+        localStorage.setItem("ophelia_admin_token", data.admin_token);
+        return { admin: data.admin, isAdmin: true };
+      }
+
       if (response.ok && data.token) {
         save(data.user, data.token);
         return { user: data.user };
       }
 
-      return { error: data.message || "Login failed" };
+      return { error: data.error || data.message || "Login failed" };
     } catch (error) {
       return { error: error.message || "Login failed" };
     }
@@ -65,7 +70,7 @@ export const AuthProvider = ({ children }) => {
         return { user: data.user };
       }
 
-      return { error: data.message || "Registration failed" };
+      return { error: data.error || data.message || "Registration failed" };
     } catch (error) {
       return { error: error.message || "Registration failed" };
     }
@@ -75,6 +80,7 @@ export const AuthProvider = ({ children }) => {
     setUser(null);
     setToken(null);
     localStorage.removeItem("auth");
+    localStorage.removeItem("ophelia_admin_token");
   };
 
   return (
