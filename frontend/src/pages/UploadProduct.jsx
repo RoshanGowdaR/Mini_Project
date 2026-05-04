@@ -60,21 +60,40 @@ export default function UploadProduct() {
     }
   };
 
-  const onDrop = useCallback((acceptedFiles) => {
-    acceptedFiles.forEach((file) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        setUploadedImages((prev) => [...prev, reader.result]);
-      };
-      reader.readAsDataURL(file);
+  const MAX_FILES = 8;
+  const MAX_SIZE_BYTES = 5 * 1024 * 1024; // 5MB
+  const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"];
+
+  const onDrop = useCallback((acceptedFiles, fileRejections) => {
+    if (fileRejections.length > 0) {
+      fileRejections.forEach((rej) => {
+        rej.errors.forEach((err) => {
+          if (err.code === "file-too-large") toast.error(`${rej.file.name} exceeds 5MB limit`);
+          else if (err.code === "file-invalid-type") toast.error(`${rej.file.name} is not a valid image type`);
+          else toast.error(err.message);
+        });
+      });
+      return;
+    }
+
+    setUploadedImages((prev) => {
+      const combined = [...prev, ...acceptedFiles];
+      if (combined.length > MAX_FILES) {
+        toast.error(`Maximum ${MAX_FILES} images allowed`);
+        return prev;
+      }
+      return combined;
     });
-    toast.success(`${acceptedFiles.length} image(s) uploaded successfully`);
+    if (acceptedFiles.length > 0) {
+      toast.success(`${acceptedFiles.length} image(s) added`);
+    }
   }, []);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: { "image/*": [".jpeg", ".jpg", ".png", ".webp"] },
-    maxFiles: 8,
+    maxFiles: MAX_FILES,
+    maxSize: MAX_SIZE_BYTES,
   });
 
   const removeImage = (index) => {
@@ -129,6 +148,31 @@ export default function UploadProduct() {
 
     try {
       const token = JSON.parse(localStorage.getItem("auth") || "{}").token;
+      let imageUrls = ["/placeholder.svg"];
+
+      // Step 1: Upload images to Supabase Storage via backend
+      if (uploadedImages.length > 0) {
+        const imageFormData = new FormData();
+        uploadedImages.forEach((file) => {
+          imageFormData.append("files", file);
+        });
+
+        const uploadResponse = await fetch("/api/products/upload-images", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          body: imageFormData,
+        });
+
+        const uploadData = await uploadResponse.json();
+        if (!uploadResponse.ok) {
+          throw new Error(uploadData.message || "Failed to upload images");
+        }
+        imageUrls = uploadData.image_urls;
+      }
+
+      // Step 2: Create product with the returned image URLs
       const response = await fetch("/api/products", {
         method: "POST",
         headers: {
@@ -147,7 +191,7 @@ export default function UploadProduct() {
             .filter(Boolean),
           dimensions: formData.dimensions,
           weight: formData.weight,
-          images: uploadedImages.length ? uploadedImages : ["/placeholder.svg"],
+          images: imageUrls,
           stock_quantity: Number(formData.stockQuantity) || 0,
           is_available: true,
         }),
@@ -197,14 +241,15 @@ export default function UploadProduct() {
                 <input {...getInputProps()} />
                 <Upload className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
                 <p className="text-muted-foreground mb-2 font-medium">Drag and drop images here, or click to select</p>
-                <p className="text-sm text-muted-foreground">Up to 8 images (JPEG, PNG, WEBP)</p>
+                <p className="text-sm text-muted-foreground">Up to 8 images (JPEG, PNG, WEBP) · Max 5MB each</p>
               </div>
 
               {uploadedImages.length > 0 && (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
-                  {uploadedImages.map((image, index) => (
-                    <div key={`${image}-${index}`} className="relative group">
-                      <img src={image} alt={`Upload ${index + 1}`} className="w-full h-32 object-cover rounded-lg border-2 border-border" />
+                  {uploadedImages.map((file, index) => (
+                    <div key={`${file.name}-${index}`} className="relative group">
+                      <img src={URL.createObjectURL(file)} alt={`Upload ${index + 1}`} className="w-full h-32 object-cover rounded-lg border-2 border-border" />
+                      <p className="text-xs text-muted-foreground mt-1 truncate">{file.name}</p>
                       <button
                         type="button"
                         onClick={() => removeImage(index)}
