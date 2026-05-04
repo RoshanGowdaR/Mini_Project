@@ -11,4 +11,4 @@ resend==0.7.0
 supabase==2.5.1
 razorpay==1.4.1
 python-multipart==0.0.9
-setuptools
+setuptools<78
