@@ -1103,7 +1103,22 @@ async def get_bid_requests(authorization: Optional[str] = Header(default=None)):
 
   client = require_supabase()
   response = client.table("auction_items").select("*").eq("artisan_id", user.get("id")).order("created_at", desc=True).execute()
-  return response.data or []
+  items = response.data or []
+  
+  user_ids = set()
+  for item in items:
+    if item.get("current_winner_id"):
+      user_ids.add(item["current_winner_id"])
+      
+  user_map = fetch_users_by_ids(list(user_ids)) if user_ids else {}
+  
+  for item in items:
+    if item.get("status") == "ended":
+      winner = user_map.get(item.get("current_winner_id"))
+      if winner:
+        item["winner_email"] = winner.get("email")
+
+  return items
 
 
 @app.get("/api/auctions")
