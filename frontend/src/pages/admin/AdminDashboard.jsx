@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Play, StopCircle, Pencil, CheckCircle2, XCircle, Users } from "lucide-react";
+import { Play, StopCircle, Pencil, CheckCircle2, XCircle, Users, Mail } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -265,6 +265,24 @@ const AdminDashboard = () => {
                       <Users className="w-4 h-4" />
                       {regCounts[auction.id] || 0} registered participants
                     </p>
+                  )}
+                  {auction.status === "ended" && (
+                    <div className="mt-2 space-y-1">
+                      <p className="text-sm">
+                        <span className="font-semibold text-amber-700">Winner:</span> {auction.current_winner_name || "None"}
+                        {auction.current_bid && ` (₹${Number(auction.current_bid).toLocaleString()})`}
+                      </p>
+                      {auction.winner_email && (
+                        <p className="text-sm flex items-center gap-1 text-muted-foreground">
+                          <Mail className="w-3 h-3" /> Winner: {auction.winner_email}
+                        </p>
+                      )}
+                      {auction.artisan_email && (
+                        <p className="text-sm flex items-center gap-1 text-muted-foreground">
+                          <Mail className="w-3 h-3" /> Artisan: {auction.artisan_email}
+                        </p>
+                      )}
+                    </div>
                   )}
                 </div>
                 <div className="flex gap-2">
