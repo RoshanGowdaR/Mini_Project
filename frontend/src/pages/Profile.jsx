@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Briefcase, Loader2, Mail, Package, ShoppingBag, Sparkles, User } from "lucide-react";
+import { Briefcase, Loader2, Mail, Package, ShoppingBag, Sparkles, User, Trophy } from "lucide-react";
 
 import Footer from "@/components/Footer";
 import Navigation from "@/components/Navigation";
@@ -25,6 +25,7 @@ export default function Profile() {
   const [products, setProducts] = useState([]);
   const [orders, setOrders] = useState([]);
   const [auctionRequests, setAuctionRequests] = useState([]);
+  const [wonAuctions, setWonAuctions] = useState([]);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -43,7 +44,7 @@ export default function Profile() {
       setLoading(true);
       const token = JSON.parse(localStorage.getItem("auth") || "{}").token;
 
-      const [artisanRes, productsRes, ordersRes, auctionsRes] = await Promise.allSettled([
+      const [artisanRes, productsRes, ordersRes, auctionsRes, wonRes] = await Promise.allSettled([
         fetch("/api/artisans/profile", {
           headers: { Authorization: `Bearer ${token}` },
         }),
@@ -56,6 +57,9 @@ export default function Profile() {
               headers: { Authorization: `Bearer ${token}` },
             })
           : Promise.resolve(null),
+        fetch("/api/auctions/won", {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
       ]);
 
       if (artisanRes.status === "fulfilled") {
@@ -83,6 +87,13 @@ export default function Profile() {
         const auctionData = await parseJsonSafely(auctionsRes.value, []);
         if (auctionsRes.value.ok) {
           setAuctionRequests(Array.isArray(auctionData) ? auctionData : []);
+        }
+      }
+
+      if (wonRes.status === "fulfilled" && wonRes.value) {
+        const wonData = await parseJsonSafely(wonRes.value, []);
+        if (wonRes.value.ok) {
+          setWonAuctions(Array.isArray(wonData) ? wonData : []);
         }
       }
     } catch (error) {
@@ -291,6 +302,51 @@ export default function Profile() {
             </CardContent>
           </Card>
         </div>
+
+        {wonAuctions.length > 0 && (
+          <Card className="border-2 border-amber-400/30 bg-amber-50/10 mt-6">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Trophy className="h-5 w-5 text-amber-600" />
+                Auctions Won
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {wonAuctions.map((auction) => (
+                <div key={auction.id} className="rounded-lg border p-4 bg-background">
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="font-semibold text-lg">{auction.title}</p>
+                    <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100">Winner 🎉</Badge>
+                  </div>
+                  <div className="grid md:grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <p className="text-muted-foreground">Winning Bid</p>
+                      <p className="font-semibold text-primary text-lg">₹{Number(auction.current_bid).toLocaleString()}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Status</p>
+                      <p className="font-medium text-emerald-600">Pending Delivery</p>
+                    </div>
+                    {auction.artisan_email && (
+                      <div className="md:col-span-2 mt-2 pt-2 border-t">
+                        <p className="text-muted-foreground mb-1">Artisan Contact for Delivery/Payment:</p>
+                        <p className="font-medium flex items-center gap-2">
+                          <Mail className="w-4 h-4 text-primary" />
+                          <a href={`mailto:${auction.artisan_email}`} className="text-primary hover:underline">
+                            {auction.artisan_email}
+                          </a>
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                  <Button className="mt-4 w-full md:w-auto" variant="outline" onClick={() => navigate(`/auctions/${auction.id}`)}>
+                    View Auction Details
+                  </Button>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        )}
 
         {user?.role === "artisan" && (
           <Card className="border-2 border-primary/20 mt-6">
