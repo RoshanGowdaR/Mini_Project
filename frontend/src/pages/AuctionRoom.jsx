@@ -535,7 +535,14 @@ const AuctionRoom = () => {
               ) : (
                 <p className="text-muted-foreground mb-4">No bids were placed on this auction.</p>
               )}
-              <Button variant="outline" onClick={() => navigate("/auctions")}>Back to Auctions</Button>
+              <div className="flex flex-wrap gap-3 justify-center">
+                <Button variant="outline" onClick={() => navigate("/auctions")}>Back to Auctions</Button>
+                {user && (user.id === auction.current_winner_id || user.id === auction.artisan_id) && auction.current_winner_name && (
+                  <Button onClick={() => navigate("/profile")}>
+                    {user.id === auction.artisan_id ? "📦 Manage Order" : "📋 View Order Status"}
+                  </Button>
+                )}
+              </div>
             </Card>
           </div>
         )}

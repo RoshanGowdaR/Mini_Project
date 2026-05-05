@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Briefcase, Loader2, Mail, Package, ShoppingBag, Sparkles, User, Trophy } from "lucide-react";
+import { Briefcase, Loader2, Mail, Package, ShoppingBag, Sparkles, User, Trophy, Gavel } from "lucide-react";
 
 import Footer from "@/components/Footer";
 import Navigation from "@/components/Navigation";
@@ -8,6 +8,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
+import AuctionOrderTracker from "@/components/AuctionOrderTracker";
+import AuctionContactExchange from "@/components/AuctionContactExchange";
 
 const parseJsonSafely = async (response, fallback) => {
   try {
@@ -26,6 +28,7 @@ export default function Profile() {
   const [orders, setOrders] = useState([]);
   const [auctionRequests, setAuctionRequests] = useState([]);
   const [wonAuctions, setWonAuctions] = useState([]);
+  const [auctionOrders, setAuctionOrders] = useState([]);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -44,7 +47,7 @@ export default function Profile() {
       setLoading(true);
       const token = JSON.parse(localStorage.getItem("auth") || "{}").token;
 
-      const [artisanRes, productsRes, ordersRes, auctionsRes, wonRes] = await Promise.allSettled([
+      const [artisanRes, productsRes, ordersRes, auctionsRes, wonRes, auctionOrdersRes] = await Promise.allSettled([
         fetch("/api/artisans/profile", {
           headers: { Authorization: `Bearer ${token}` },
         }),
@@ -58,6 +61,9 @@ export default function Profile() {
             })
           : Promise.resolve(null),
         fetch("/api/auctions/won", {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        fetch("/api/auction-orders", {
           headers: { Authorization: `Bearer ${token}` },
         }),
       ]);
@@ -96,6 +102,13 @@ export default function Profile() {
           setWonAuctions(Array.isArray(wonData) ? wonData : []);
         }
       }
+
+      if (auctionOrdersRes.status === "fulfilled" && auctionOrdersRes.value) {
+        const aoData = await parseJsonSafely(auctionOrdersRes.value, []);
+        if (auctionOrdersRes.value.ok) {
+          setAuctionOrders(Array.isArray(aoData) ? aoData : []);
+        }
+      }
     } catch (error) {
       console.error("Error fetching profile data:", error);
     } finally {
@@ -110,6 +123,13 @@ export default function Profile() {
       </div>
     );
   }
+
+  // Split auction orders by role
+  const artisanAuctionOrders = auctionOrders.filter((o) => o.role === "artisan");
+  const winnerAuctionOrders = auctionOrders.filter((o) => o.role === "winner");
+
+  // Filter auction requests to only show non-ended ones (ended ones are in auctionOrders now)
+  const pendingAuctionRequests = auctionRequests.filter((r) => r.status !== "ended");
 
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-b from-background to-accent/10">
@@ -303,7 +323,108 @@ export default function Profile() {
           </Card>
         </div>
 
-        {wonAuctions.length > 0 && (
+        {/* ═══ AUCTION ORDERS — Winner View (Auctions Won with Order Tracker) ═══ */}
+        {winnerAuctionOrders.length > 0 && (
+          <Card className="border-2 border-amber-400/30 bg-amber-50/10 mt-6">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Trophy className="h-5 w-5 text-amber-600" />
+                Auctions Won — Order Status
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {winnerAuctionOrders.map((order) => (
+                <div key={order.id} className="rounded-xl border-2 border-amber-200/50 p-5 bg-background space-y-4">
+                  <div className="flex items-start justify-between flex-wrap gap-2">
+                    <div>
+                      <p className="font-bold text-lg">{order.auction_title}</p>
+                      <p className="text-sm text-muted-foreground">
+                        Won on {order.actual_end ? new Date(order.actual_end).toLocaleDateString() : "—"}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm text-muted-foreground">Winning Bid</p>
+                      <p className="text-xl font-bold text-primary">₹{Number(order.winning_bid || 0).toLocaleString()}</p>
+                    </div>
+                  </div>
+
+                  {/* Artisan Info */}
+                  <div className="text-sm border-t pt-3">
+                    <p className="text-muted-foreground">Artisan: <span className="font-medium text-foreground">{order.artisan_name}</span></p>
+                    {order.artisan_email && (
+                      <p className="text-muted-foreground">
+                        Email: <a href={`mailto:${order.artisan_email}`} className="text-primary hover:underline">{order.artisan_email}</a>
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Order Status Tracker */}
+                  <AuctionOrderTracker order={order} role="winner" onStatusUpdated={fetchProfileData} />
+
+                  {/* Contact Exchange */}
+                  <AuctionContactExchange auctionId={order.auction_id} userId={user?.id} role="winner" />
+
+                  <Button variant="outline" size="sm" onClick={() => navigate(`/auctions/${order.auction_id}`)}>
+                    View Auction Details
+                  </Button>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* ═══ AUCTION ORDERS — Artisan View (Items Sold via Auction) ═══ */}
+        {artisanAuctionOrders.length > 0 && (
+          <Card className="border-2 border-emerald-400/30 bg-emerald-50/10 mt-6">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Gavel className="h-5 w-5 text-emerald-600" />
+                Auction Sales — Manage Orders
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {artisanAuctionOrders.map((order) => (
+                <div key={order.id} className="rounded-xl border-2 border-emerald-200/50 p-5 bg-background space-y-4">
+                  <div className="flex items-start justify-between flex-wrap gap-2">
+                    <div>
+                      <p className="font-bold text-lg">{order.auction_title}</p>
+                      <p className="text-sm text-muted-foreground">
+                        Ended {order.actual_end ? new Date(order.actual_end).toLocaleDateString() : "—"}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm text-muted-foreground">Sold For</p>
+                      <p className="text-xl font-bold text-emerald-600">₹{Number(order.winning_bid || 0).toLocaleString()}</p>
+                    </div>
+                  </div>
+
+                  {/* Winner Info */}
+                  <div className="text-sm border-t pt-3">
+                    <p className="text-muted-foreground">Winner: <span className="font-medium text-foreground">{order.winner_name}</span></p>
+                    {order.winner_email && (
+                      <p className="text-muted-foreground">
+                        Email: <a href={`mailto:${order.winner_email}`} className="text-primary hover:underline">{order.winner_email}</a>
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Order Status Tracker — artisan can update */}
+                  <AuctionOrderTracker order={order} role="artisan" onStatusUpdated={fetchProfileData} />
+
+                  {/* Contact Exchange */}
+                  <AuctionContactExchange auctionId={order.auction_id} userId={user?.id} role="artisan" />
+
+                  <Button variant="outline" size="sm" onClick={() => navigate(`/auctions/${order.auction_id}`)}>
+                    View Auction Details
+                  </Button>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* ═══ Legacy: Auctions Won (fallback for items without auction_orders) ═══ */}
+        {wonAuctions.filter((a) => !auctionOrders.some((o) => o.auction_id === a.id)).length > 0 && (
           <Card className="border-2 border-amber-400/30 bg-amber-50/10 mt-6">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -312,7 +433,9 @@ export default function Profile() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              {wonAuctions.map((auction) => (
+              {wonAuctions
+                .filter((a) => !auctionOrders.some((o) => o.auction_id === a.id))
+                .map((auction) => (
                 <div key={auction.id} className="rounded-lg border p-4 bg-background">
                   <div className="flex items-center justify-between mb-2">
                     <p className="font-semibold text-lg">{auction.title}</p>
@@ -329,7 +452,7 @@ export default function Profile() {
                     </div>
                     {auction.artisan_email && (
                       <div className="md:col-span-2 mt-2 pt-2 border-t">
-                        <p className="text-muted-foreground mb-1">Artisan Contact for Delivery/Payment:</p>
+                        <p className="text-muted-foreground mb-1">Artisan Contact:</p>
                         <p className="font-medium flex items-center gap-2">
                           <Mail className="w-4 h-4 text-primary" />
                           <a href={`mailto:${auction.artisan_email}`} className="text-primary hover:underline">
@@ -348,6 +471,7 @@ export default function Profile() {
           </Card>
         )}
 
+        {/* ═══ Artisan Auction Requests (pending/live/scheduled) ═══ */}
         {user?.role === "artisan" && (
           <Card className="border-2 border-primary/20 mt-6">
             <CardHeader>
@@ -376,6 +500,15 @@ export default function Profile() {
                       <Button className="mt-3" onClick={() => navigate(`/auctions/${request.id}`)}>
                         View Live Auction
                       </Button>
+                    )}
+                    {request.status === "ended" && request.winner_email && (
+                      <div className="mt-2 text-sm">
+                        <p className="text-muted-foreground">
+                          Winner: <span className="font-medium text-foreground">{request.current_winner_name}</span>
+                          {" · "}
+                          <a href={`mailto:${request.winner_email}`} className="text-primary hover:underline">{request.winner_email}</a>
+                        </p>
+                      </div>
                     )}
                   </div>
                 ))
