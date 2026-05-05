@@ -152,6 +152,20 @@ class AuctionBidPayload(BaseModel):
   amount: float
 
 
+class AuctionStatusUpdatePayload(BaseModel):
+  status: str
+  note: Optional[str] = None
+
+
+class ContactRequestPayload(BaseModel):
+  phone: str
+
+
+class ContactRespondPayload(BaseModel):
+  phone: str
+  action: str
+
+
 class ProductPayload(BaseModel):
   title: str
   description: str
@@ -1123,6 +1137,20 @@ async def end_auction(auction_id: str, authorization: Optional[str] = Header(def
     if other_emails:
       send_auction_email(other_emails, f"Auction ended: {item.get('title')}", "<p>The auction has ended. Thank you for participating.</p>")
 
+    # Auto-create auction_orders row for the winner
+    if winner_id:
+      try:
+        client.table("auction_orders").insert({
+          "auction_id": auction_id,
+          "artisan_id": item.get("artisan_id", ""),
+          "winner_id": winner_id,
+          "status": "won",
+          "created_at": now,
+          "updated_at": now,
+        }).execute()
+      except Exception as e:
+        print(f"Failed to create auction_order: {e}")
+
   return item or {}
 
 
@@ -1182,6 +1210,23 @@ async def get_public_auctions():
   return response.data or []
 
 
+# IMPORTANT: /api/auctions/won MUST be defined BEFORE /api/auctions/{auction_id}
+# otherwise FastAPI matches "won" as an auction_id path parameter
+@app.get("/api/auctions/won")
+async def get_won_auctions(authorization: Optional[str] = Header(default=None)):
+  user = require_user(authorization)
+  client = require_supabase()
+  response = client.table("auction_items").select("*").eq("current_winner_id", user.get("id")).eq("status", "ended").order("actual_end", desc=True).execute()
+  
+  items = response.data or []
+  for item in items:
+    artisan_db = fetch_user_by_id(item.get("artisan_id")) if item.get("artisan_id") else None
+    if artisan_db:
+      item["artisan_email"] = artisan_db.get("email")
+      
+  return items
+
+
 @app.get("/api/auctions/{auction_id}")
 async def get_auction_detail(auction_id: str, authorization: Optional[str] = Header(default=None)):
   client = require_supabase()
@@ -1238,20 +1283,6 @@ async def get_auction_detail(auction_id: str, authorization: Optional[str] = Hea
     "registration_count": len(registrations or []),
     "accepts_registration": item.get("status") == "scheduled",
   }
-
-@app.get("/api/auctions/won")
-async def get_won_auctions(authorization: Optional[str] = Header(default=None)):
-  user = require_user(authorization)
-  client = require_supabase()
-  response = client.table("auction_items").select("*").eq("current_winner_id", user.get("id")).eq("status", "ended").order("actual_end", desc=True).execute()
-  
-  items = response.data or []
-  for item in items:
-    artisan_db = fetch_user_by_id(item.get("artisan_id")) if item.get("artisan_id") else None
-    if artisan_db:
-      item["artisan_email"] = artisan_db.get("email")
-      
-  return items
 
 
 @app.post("/api/auctions/{auction_id}/register")
@@ -1811,3 +1842,268 @@ async def update_artisan_order_status(order_id: str, payload: OrderStatusUpdateP
         raise HTTPException(status_code=500, detail={"message": "Failed to update order"})
         
     return serialize_order(updated_order)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# AUCTION ORDER TRACKING & CONTACT EXCHANGE ENDPOINTS
+# ═══════════════════════════════════════════════════════════════════
+
+AUCTION_ORDER_STATUSES = ["won", "preparing", "ready_to_ship", "shipped", "delivered"]
+
+
+@app.get("/api/auction-orders")
+async def get_auction_orders(authorization: Optional[str] = Header(default=None)):
+  """Get all auction orders for the current user."""
+  user = require_user(authorization)
+  client = require_supabase()
+  user_id = user.get("id")
+
+  artisan_orders = client.table("auction_orders").select("*").eq("artisan_id", user_id).order("created_at", desc=True).execute().data or []
+  winner_orders = client.table("auction_orders").select("*").eq("winner_id", user_id).order("created_at", desc=True).execute().data or []
+
+  all_orders = {o["auction_id"]: o for o in artisan_orders}
+  for o in winner_orders:
+    if o["auction_id"] not in all_orders:
+      all_orders[o["auction_id"]] = o
+
+  auction_ids = list(all_orders.keys())
+  if not auction_ids:
+    return []
+
+  auctions = client.table("auction_items").select("id,title,current_bid,current_winner_id,current_winner_name,artisan_id,images,actual_end").in_("id", auction_ids).execute().data or []
+  auction_map = {a["id"]: a for a in auctions}
+
+  user_ids = set()
+  for o in all_orders.values():
+    user_ids.add(o.get("artisan_id", ""))
+    user_ids.add(o.get("winner_id", ""))
+  user_ids.discard("")
+  user_map = fetch_users_by_ids(list(user_ids)) if user_ids else {}
+
+  results = []
+  for auction_id, order in all_orders.items():
+    auction_info = auction_map.get(auction_id, {})
+    artisan_user = user_map.get(order.get("artisan_id"), {})
+    winner_user = user_map.get(order.get("winner_id"), {})
+    results.append({
+      **order,
+      "auction_title": auction_info.get("title", ""),
+      "winning_bid": auction_info.get("current_bid"),
+      "winner_name": auction_info.get("current_winner_name", ""),
+      "artisan_email": artisan_user.get("email", ""),
+      "artisan_name": artisan_user.get("full_name") or artisan_user.get("email", ""),
+      "winner_email": winner_user.get("email", ""),
+      "images": auction_info.get("images", []),
+      "actual_end": auction_info.get("actual_end"),
+      "role": "artisan" if order.get("artisan_id") == user_id else "winner",
+    })
+
+  return results
+
+
+@app.get("/api/auction-orders/{auction_id}")
+async def get_auction_order_detail(auction_id: str, authorization: Optional[str] = Header(default=None)):
+  """Get order status for a specific auction."""
+  user = require_user(authorization)
+  client = require_supabase()
+  user_id = user.get("id")
+
+  order_rows = client.table("auction_orders").select("*").eq("auction_id", auction_id).execute().data or []
+  if not order_rows:
+    raise HTTPException(status_code=404, detail={"message": "Auction order not found"})
+
+  order = order_rows[0]
+  if order.get("artisan_id") != user_id and order.get("winner_id") != user_id:
+    raise HTTPException(status_code=403, detail={"message": "You are not a party to this auction order"})
+
+  auction_rows = client.table("auction_items").select("*").eq("id", auction_id).execute().data or []
+  auction_info = auction_rows[0] if auction_rows else {}
+
+  user_ids_list = [order.get("artisan_id", ""), order.get("winner_id", "")]
+  user_map = fetch_users_by_ids([uid for uid in user_ids_list if uid])
+
+  artisan_user = user_map.get(order.get("artisan_id"), {})
+  winner_user = user_map.get(order.get("winner_id"), {})
+
+  return {
+    **order,
+    "auction_title": auction_info.get("title", ""),
+    "winning_bid": auction_info.get("current_bid"),
+    "winner_name": auction_info.get("current_winner_name", ""),
+    "artisan_email": artisan_user.get("email", ""),
+    "artisan_name": artisan_user.get("full_name") or artisan_user.get("email", ""),
+    "winner_email": winner_user.get("email", ""),
+    "images": auction_info.get("images", []),
+    "actual_end": auction_info.get("actual_end"),
+    "role": "artisan" if order.get("artisan_id") == user_id else "winner",
+  }
+
+
+@app.patch("/api/auction-orders/{auction_id}/status")
+async def update_auction_order_status(
+  auction_id: str,
+  payload: AuctionStatusUpdatePayload,
+  authorization: Optional[str] = Header(default=None),
+):
+  """Only the artisan can advance the delivery status."""
+  user = require_user(authorization)
+  client = require_supabase()
+
+  order_rows = client.table("auction_orders").select("*").eq("auction_id", auction_id).execute().data or []
+  if not order_rows:
+    raise HTTPException(status_code=404, detail={"message": "Auction order not found"})
+
+  order = order_rows[0]
+  if order.get("artisan_id") != user.get("id"):
+    raise HTTPException(status_code=403, detail={"message": "Only the artisan can update the order status"})
+
+  if payload.status not in AUCTION_ORDER_STATUSES:
+    raise HTTPException(status_code=400, detail={"message": f"Invalid status. Must be one of {AUCTION_ORDER_STATUSES}"})
+
+  current_index = AUCTION_ORDER_STATUSES.index(order.get("status", "won"))
+  new_index = AUCTION_ORDER_STATUSES.index(payload.status)
+  if new_index <= current_index:
+    raise HTTPException(status_code=400, detail={"message": "Status can only move forward"})
+
+  now = datetime.now(timezone.utc).isoformat()
+  update_data = {
+    "status": payload.status,
+    "updated_at": now,
+  }
+  if payload.note:
+    update_data["artisan_note"] = payload.note
+
+  response = client.table("auction_orders").update(update_data).eq("id", order["id"]).execute()
+  updated = (response.data or [None])[0]
+  if not updated:
+    raise HTTPException(status_code=500, detail={"message": "Failed to update order status"})
+  return updated
+
+
+@app.post("/api/auction-orders/{auction_id}/contact-request")
+async def create_contact_request(
+  auction_id: str,
+  payload: ContactRequestPayload,
+  authorization: Optional[str] = Header(default=None),
+):
+  """Either party initiates a contact exchange request."""
+  user = require_user(authorization)
+  client = require_supabase()
+  user_id = user.get("id")
+
+  phone = payload.phone.strip()
+  if not phone or not re.match(r"^\d{10,15}$", phone):
+    raise HTTPException(status_code=400, detail={"message": "Phone must be 10-15 digits"})
+
+  order_rows = client.table("auction_orders").select("*").eq("auction_id", auction_id).execute().data or []
+  if not order_rows:
+    raise HTTPException(status_code=404, detail={"message": "Auction order not found"})
+  order = order_rows[0]
+
+  if user_id != order.get("artisan_id") and user_id != order.get("winner_id"):
+    raise HTTPException(status_code=403, detail={"message": "You are not a party to this auction"})
+
+  existing = client.table("auction_contact_requests").select("*").eq("auction_id", auction_id).execute().data or []
+  if existing:
+    req = existing[0]
+    if req.get("requester_id") == user_id:
+      return req
+    if req.get("responder_id") == user_id and req.get("status") == "pending":
+      raise HTTPException(status_code=400, detail={"message": "A contact request already exists. Use the respond endpoint to accept or decline."})
+    raise HTTPException(status_code=400, detail={"message": "A contact exchange already exists for this auction"})
+
+  requester_role = "artisan" if user_id == order.get("artisan_id") else "winner"
+  responder_id = order.get("winner_id") if requester_role == "artisan" else order.get("artisan_id")
+
+  now = datetime.now(timezone.utc).isoformat()
+  response = client.table("auction_contact_requests").insert({
+    "auction_id": auction_id,
+    "requester_id": user_id,
+    "requester_role": requester_role,
+    "requester_phone": phone,
+    "responder_id": responder_id,
+    "status": "pending",
+    "created_at": now,
+    "updated_at": now,
+  }).execute()
+
+  return (response.data or [{}])[0]
+
+
+@app.post("/api/auction-orders/{auction_id}/contact-respond")
+async def respond_to_contact_request(
+  auction_id: str,
+  payload: ContactRespondPayload,
+  authorization: Optional[str] = Header(default=None),
+):
+  """The other party accepts or declines the contact exchange."""
+  user = require_user(authorization)
+  client = require_supabase()
+  user_id = user.get("id")
+
+  existing = client.table("auction_contact_requests").select("*").eq("auction_id", auction_id).execute().data or []
+  if not existing:
+    raise HTTPException(status_code=404, detail={"message": "No contact request found"})
+
+  req = existing[0]
+  if req.get("responder_id") != user_id:
+    raise HTTPException(status_code=403, detail={"message": "You are not the responder for this request"})
+
+  if req.get("status") != "pending":
+    raise HTTPException(status_code=400, detail={"message": f"Request is already {req.get('status')}"})
+
+  now = datetime.now(timezone.utc).isoformat()
+
+  if payload.action == "accept":
+    phone = payload.phone.strip()
+    if not phone or not re.match(r"^\d{10,15}$", phone):
+      raise HTTPException(status_code=400, detail={"message": "Phone must be 10-15 digits"})
+
+    response = client.table("auction_contact_requests").update({
+      "responder_phone": phone,
+      "status": "accepted",
+      "updated_at": now,
+    }).eq("id", req["id"]).execute()
+  elif payload.action == "decline":
+    response = client.table("auction_contact_requests").update({
+      "status": "declined",
+      "updated_at": now,
+    }).eq("id", req["id"]).execute()
+  else:
+    raise HTTPException(status_code=400, detail={"message": "Action must be 'accept' or 'decline'"})
+
+  return (response.data or [{}])[0]
+
+
+@app.get("/api/auction-orders/{auction_id}/contact")
+async def get_contact_status(auction_id: str, authorization: Optional[str] = Header(default=None)):
+  """Get contact exchange status and revealed phone numbers."""
+  user = require_user(authorization)
+  client = require_supabase()
+  user_id = user.get("id")
+
+  order_rows = client.table("auction_orders").select("*").eq("auction_id", auction_id).execute().data or []
+  if not order_rows:
+    raise HTTPException(status_code=404, detail={"message": "Auction order not found"})
+  order = order_rows[0]
+
+  if user_id != order.get("artisan_id") and user_id != order.get("winner_id"):
+    raise HTTPException(status_code=403, detail={"message": "You are not a party to this auction"})
+
+  existing = client.table("auction_contact_requests").select("*").eq("auction_id", auction_id).execute().data or []
+  if not existing:
+    return {"status": "none", "requester_id": None, "responder_id": None}
+
+  req = existing[0]
+  result = {
+    "status": req.get("status"),
+    "requester_id": req.get("requester_id"),
+    "requester_role": req.get("requester_role"),
+    "responder_id": req.get("responder_id"),
+  }
+
+  if req.get("status") == "accepted":
+    result["requester_phone"] = req.get("requester_phone")
+    result["responder_phone"] = req.get("responder_phone")
+
+  return result
