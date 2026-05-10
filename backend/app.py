@@ -10,11 +10,8 @@ from typing import Any, Dict, List, Optional
 import bcrypt
 import jwt
 import resend
-import razorpay
-import hmac
-import hashlib
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header, HTTPException, Request, UploadFile, File
+from fastapi import FastAPI, Header, HTTPException, Request, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from groq import Groq
@@ -47,13 +44,6 @@ supabase_service_key = os.getenv("SUPABASE_SERVICE_KEY", "")
 supabase_anon_key = os.getenv("SUPABASE_ANON_KEY", "")
 resend_api_key = os.getenv("RESEND_API_KEY", "")
 admin_secret_key = os.getenv("ADMIN_SECRET_KEY", "secret-admin")
-
-razorpay_key_id = os.getenv("RAZORPAY_KEY_ID", "")
-razorpay_key_secret = os.getenv("RAZORPAY_KEY_SECRET", "")
-if razorpay_key_id and razorpay_key_secret:
-    razorpay_client = razorpay.Client(auth=(razorpay_key_id, razorpay_key_secret))
-else:
-    razorpay_client = None
 
 supabase_client: Optional[Client] = None
 if supabase_url and supabase_service_key:
@@ -150,20 +140,6 @@ class AuctionRequestPayload(BaseModel):
 
 class AuctionBidPayload(BaseModel):
   amount: float
-
-
-class AuctionStatusUpdatePayload(BaseModel):
-  status: str
-  note: Optional[str] = None
-
-
-class ContactRequestPayload(BaseModel):
-  phone: str
-
-
-class ContactRespondPayload(BaseModel):
-  phone: str
-  action: str
 
 
 class ProductPayload(BaseModel):
@@ -534,11 +510,19 @@ def extract_message(detail: Any):
 
 
 def get_groq_client():
-  if not groq_api_key:
+  backup_key = os.getenv("GROQ_BACKUP_API_KEY", "")
+  key_to_use = groq_api_key if groq_api_key else backup_key
+  if not key_to_use:
     return None
   try:
-    return Groq(api_key=groq_api_key)
+    client = Groq(api_key=key_to_use)
+    return client
   except Exception:
+    if key_to_use != backup_key:
+      try:
+        return Groq(api_key=backup_key)
+      except Exception:
+        return None
     return None
 
 
@@ -602,34 +586,6 @@ def generate_groq_completion(
     return completion.choices[0].message.content
   except Exception:
     return None
-
-
-def get_cached_or_fetch(cache_key: str, prompt: str, temperature: float = 0.4, model: Optional[str] = None):
-  client = require_supabase()
-  # 1. Query Supabase cache
-  response = client.table("groq_cache").select("response").eq("cache_key", cache_key).gte("created_at", (datetime.utcnow() - timedelta(hours=1)).isoformat()).execute()
-  if response.data and len(response.data) > 0:
-    return response.data[0]["response"]
-      
-  # 2. Cache miss, call Groq API
-  try:
-    messages = json.loads(prompt)
-  except Exception:
-    messages = [{"role": "user", "content": prompt}]
-      
-  fresh_response = generate_groq_completion(messages, temperature=temperature, model=model)
-  if not fresh_response:
-    return None
-      
-  # 3. Upsert into cache
-  upsert_data = {
-    "cache_key": cache_key,
-    "response": fresh_response,
-    "created_at": datetime.utcnow().isoformat()
-  }
-  client.table("groq_cache").upsert(upsert_data, on_conflict="cache_key").execute()
-  
-  return fresh_response
 
 
 def extract_json_payload(raw: str):
@@ -702,7 +658,8 @@ def generate_market_trends():
     "Focus on broader market movement across ceramics, textiles, jewelry, paintings, folk art, decor, gifting, and premium handmade products. "
     "Give a concise current market analysis with the strongest categories, buyer demand signals, likely top-trending product types, and a simple 6-point momentum view."
   )
-  messages = [
+  raw_market_report = generate_groq_completion(
+    [
       {"role": "system", "content": live_market_prompt},
       {
         "role": "user",
@@ -713,12 +670,7 @@ def generate_market_trends():
           }
         ),
       },
-    ]
-  prompt_str = json.dumps(messages)
-  cache_key = hashlib.md5(prompt_str.encode()).hexdigest()
-  raw_market_report = get_cached_or_fetch(
-    cache_key=cache_key,
-    prompt=prompt_str,
+    ],
     temperature=0.3,
     model=groq_market_model,
   )
@@ -737,15 +689,11 @@ def generate_market_trends():
     "trending_products is an array of up to 5 objects with keys name and score. "
     "Do not include markdown, explanation, or code fences."
   )
-  norm_messages = [
+  normalized = generate_groq_completion(
+    [
       {"role": "system", "content": normalization_prompt},
       {"role": "user", "content": raw_market_report},
-    ]
-  norm_prompt_str = json.dumps(norm_messages)
-  norm_cache_key = hashlib.md5(norm_prompt_str.encode()).hexdigest()
-  normalized = get_cached_or_fetch(
-    cache_key=norm_cache_key,
-    prompt=norm_prompt_str,
+    ],
     temperature=0.1,
   )
 
@@ -763,15 +711,11 @@ def generate_market_trends():
     "trending_products must contain up to 5 objects with keys name and score representing current real-world trending handmade product types. "
     "Do not include markdown or explanations."
   )
-  chart_messages = [
+  chart_raw = generate_groq_completion(
+    [
       {"role": "system", "content": chart_prompt},
       {"role": "user", "content": raw_market_report},
-    ]
-  chart_prompt_str = json.dumps(chart_messages)
-  chart_cache_key = hashlib.md5(chart_prompt_str.encode()).hexdigest()
-  chart_raw = get_cached_or_fetch(
-    cache_key=chart_cache_key,
-    prompt=chart_prompt_str,
+    ],
     temperature=0.15,
   )
   chart_data = extract_json_payload(chart_raw or "") or {}
@@ -799,7 +743,8 @@ def generate_artisan_recommendations(user_id: str):
     "Use the artisan profile and current market data. Return valid JSON with one key: "
     "recommendations, which must be an array of exactly 5 concise recommendation strings."
   )
-  messages = [
+  raw = generate_groq_completion(
+    [
       {"role": "system", "content": prompt},
       {
         "role": "user",
@@ -810,12 +755,7 @@ def generate_artisan_recommendations(user_id: str):
           }
         ),
       },
-    ]
-  prompt_str = json.dumps(messages)
-  cache_key = hashlib.md5(prompt_str.encode()).hexdigest()
-  raw = get_cached_or_fetch(
-    cache_key=cache_key,
-    prompt=prompt_str,
+    ],
     temperature=0.35,
   )
 
@@ -972,6 +912,25 @@ async def admin_me(authorization: Optional[str] = Header(default=None)):
   return {"id": admin.get("id"), "email": admin.get("email")}
 
 
+@app.get("/api/admin/metrics")
+async def get_admin_metrics(authorization: Optional[str] = Header(default=None)):
+  require_admin(authorization)
+  client = require_supabase()
+  
+  users_response = client.table("users").select("id,email,role,full_name,created_at").order("created_at", desc=True).execute()
+  users = users_response.data or []
+  
+  artisans = [u for u in users if u.get("role") == "artisan"]
+  buyers = [u for u in users if u.get("role") == "buyer"]
+  
+  return {
+    "total_users": len(users),
+    "total_artisans": len(artisans),
+    "total_buyers": len(buyers),
+    "users": users
+  }
+
+
 @app.get("/api/admin/auction-requests")
 async def get_auction_requests(authorization: Optional[str] = Header(default=None)):
   require_admin(authorization)
@@ -985,28 +944,7 @@ async def get_admin_auctions(authorization: Optional[str] = Header(default=None)
   require_admin(authorization)
   client = require_supabase()
   response = client.table("auction_items").select("*").order("created_at", desc=True).execute()
-  items = response.data or []
-  
-  # Fetch all relevant users for contact info
-  user_ids = set()
-  for item in items:
-    if item.get("artisan_id"):
-      user_ids.add(item["artisan_id"])
-    if item.get("current_winner_id"):
-      user_ids.add(item["current_winner_id"])
-      
-  user_map = fetch_users_by_ids(list(user_ids)) if user_ids else {}
-  
-  for item in items:
-    if item.get("status") == "ended":
-      artisan = user_map.get(item.get("artisan_id"))
-      if artisan:
-        item["artisan_email"] = artisan.get("email")
-      winner = user_map.get(item.get("current_winner_id"))
-      if winner:
-        item["winner_email"] = winner.get("email")
-        
-  return items
+  return response.data or []
 
 
 @app.post("/api/admin/auctions/{auction_id}/approve")
@@ -1137,20 +1075,6 @@ async def end_auction(auction_id: str, authorization: Optional[str] = Header(def
     if other_emails:
       send_auction_email(other_emails, f"Auction ended: {item.get('title')}", "<p>The auction has ended. Thank you for participating.</p>")
 
-    # Auto-create auction_orders row for the winner
-    if winner_id:
-      try:
-        client.table("auction_orders").insert({
-          "auction_id": auction_id,
-          "artisan_id": item.get("artisan_id", ""),
-          "winner_id": winner_id,
-          "status": "won",
-          "created_at": now,
-          "updated_at": now,
-        }).execute()
-      except Exception as e:
-        print(f"Failed to create auction_order: {e}")
-
   return item or {}
 
 
@@ -1185,22 +1109,7 @@ async def get_bid_requests(authorization: Optional[str] = Header(default=None)):
 
   client = require_supabase()
   response = client.table("auction_items").select("*").eq("artisan_id", user.get("id")).order("created_at", desc=True).execute()
-  items = response.data or []
-  
-  user_ids = set()
-  for item in items:
-    if item.get("current_winner_id"):
-      user_ids.add(item["current_winner_id"])
-      
-  user_map = fetch_users_by_ids(list(user_ids)) if user_ids else {}
-  
-  for item in items:
-    if item.get("status") == "ended":
-      winner = user_map.get(item.get("current_winner_id"))
-      if winner:
-        item["winner_email"] = winner.get("email")
-
-  return items
+  return response.data or []
 
 
 @app.get("/api/auctions")
@@ -1210,25 +1119,8 @@ async def get_public_auctions():
   return response.data or []
 
 
-# IMPORTANT: /api/auctions/won MUST be defined BEFORE /api/auctions/{auction_id}
-# otherwise FastAPI matches "won" as an auction_id path parameter
-@app.get("/api/auctions/won")
-async def get_won_auctions(authorization: Optional[str] = Header(default=None)):
-  user = require_user(authorization)
-  client = require_supabase()
-  response = client.table("auction_items").select("*").eq("current_winner_id", user.get("id")).eq("status", "ended").order("actual_end", desc=True).execute()
-  
-  items = response.data or []
-  for item in items:
-    artisan_db = fetch_user_by_id(item.get("artisan_id")) if item.get("artisan_id") else None
-    if artisan_db:
-      item["artisan_email"] = artisan_db.get("email")
-      
-  return items
-
-
 @app.get("/api/auctions/{auction_id}")
-async def get_auction_detail(auction_id: str, authorization: Optional[str] = Header(default=None)):
+async def get_auction_detail(auction_id: str):
   client = require_supabase()
   auction = client.table("auction_items").select("*").eq("id", auction_id).execute().data
   bids = client.table("auction_bids").select("*").eq("auction_id", auction_id).order("placed_at", desc=True).execute().data
@@ -1236,47 +1128,6 @@ async def get_auction_detail(auction_id: str, authorization: Optional[str] = Hea
   if not auction:
     raise HTTPException(status_code=404, detail={"message": "Auction not found"})
   item = auction[0]
-
-  winner_email = None
-  artisan_email = None
-  if item.get("status") == "ended" and authorization:
-    try:
-      # Try as normal user
-      user = None
-      try:
-        user = require_user(authorization)
-      except Exception:
-        pass
-      
-      # Try as admin
-      is_admin = False
-      try:
-        require_admin(authorization)
-        is_admin = True
-      except Exception:
-        pass
-
-      user_id = user.get("id") if user else None
-      
-      if is_admin or user_id == item.get("artisan_id"):
-        if item.get("current_winner_id"):
-          winner_db = fetch_user_by_id(item.get("current_winner_id"))
-          if winner_db:
-            winner_email = winner_db.get("email")
-      
-      if is_admin or user_id == item.get("current_winner_id"):
-        if item.get("artisan_id"):
-          artisan_db = fetch_user_by_id(item.get("artisan_id"))
-          if artisan_db:
-            artisan_email = artisan_db.get("email")
-    except Exception:
-      pass
-
-  if winner_email:
-    item["winner_email"] = winner_email
-  if artisan_email:
-    item["artisan_email"] = artisan_email
-
   return {
     "auction": item,
     "bids": bids or [],
@@ -1417,52 +1268,6 @@ async def get_artisan_recommendations(authorization: Optional[str] = Header(defa
   return generate_artisan_recommendations(user["id"])
 
 
-@app.post("/api/products/upload-images")
-async def upload_product_images(
-    files: List[UploadFile] = File(...),
-    authorization: Optional[str] = Header(default=None)
-):
-    user = require_user(authorization)
-    if user.get("role") != "artisan":
-        raise HTTPException(status_code=403, detail={"message": "Only artisans can upload product images"})
-        
-    client = require_supabase()
-    
-    if len(files) > 8:
-        raise HTTPException(status_code=400, detail={"message": "Maximum 8 files allowed"})
-        
-    uploaded_urls = []
-    
-    for file in files:
-        if file.content_type not in ["image/jpeg", "image/png", "image/webp"]:
-            raise HTTPException(status_code=400, detail={"message": "Only JPEG, PNG, and WEBP formats are allowed"})
-            
-        file.file.seek(0, 2)
-        size = file.file.tell()
-        file.file.seek(0)
-        
-        if size > 5 * 1024 * 1024:
-            raise HTTPException(status_code=400, detail={"message": "File size must be under 5MB"})
-            
-        file_bytes = file.file.read()
-        file_ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
-        file_path = f"{user['id']}/{uuid.uuid4()}.{file_ext}"
-        
-        try:
-            client.storage.from_("product-images").upload(
-                file_path, 
-                file_bytes, 
-                file_options={"content-type": file.content_type}
-            )
-            public_url = client.storage.from_("product-images").get_public_url(file_path)
-            uploaded_urls.append(public_url)
-        except Exception as e:
-            print("Upload failed:", e)
-            raise HTTPException(status_code=500, detail={"message": "Failed to upload image"})
-            
-    return {"image_urls": uploaded_urls}
-
-
 @app.post("/api/products")
 async def create_product(payload: ProductPayload, authorization: Optional[str] = Header(default=None)):
   user = require_user(authorization)
@@ -1488,6 +1293,43 @@ async def get_products(artisan_id: Optional[str] = None):
   artisan_map = fetch_users_by_ids(artisan_ids)
   review_summary = fetch_review_summary([row.get("id") for row in product_rows if row.get("id")])
   return [serialize_product(row, artisan_map=artisan_map, review_summary=review_summary) for row in product_rows]
+
+
+@app.post("/api/products/upload-images")
+async def upload_images(
+  files: List[UploadFile] = File(...),
+  authorization: Optional[str] = Header(default=None)
+):
+  user = require_user(authorization)
+  if user.get("role") != "artisan":
+    raise HTTPException(status_code=403, detail={"message": "Only artisans can upload product images"})
+    
+  client = require_supabase()
+  image_urls = []
+  
+  for file in files:
+    try:
+      ext = file.filename.split(".")[-1]
+      filename = f"{user['id']}/{uuid.uuid4()}.{ext}"
+      content = await file.read()
+      
+      # Upload to 'products' bucket
+      client.storage.from_("products").upload(
+        path=filename, 
+        file=content, 
+        file_options={"content-type": file.content_type}
+      )
+      
+      public_url = client.storage.from_("products").get_public_url(filename)
+      image_urls.append(public_url)
+    except Exception as e:
+      print(f"Failed to upload image {file.filename}: {e}")
+      # Continue with other files or fail entire request? We'll continue but if all fail we could raise.
+      
+  if not image_urls and files:
+    raise HTTPException(status_code=500, detail={"message": "Failed to upload images"})
+    
+  return {"image_urls": image_urls}
 
 
 @app.get("/api/products/{product_id}")
@@ -1565,21 +1407,10 @@ async def save_product_review(
   reviewer_map = fetch_users_by_ids([user["id"]])
   artisan_map = fetch_users_by_ids([product.get("artisan_id")])
   review_summary = fetch_review_summary([product_id])
-  
-  # Update product table with aggregated values
-  prod_summary = review_summary.get(product_id, {"count": 0, "sum": 0.0})
-  count = prod_summary["count"]
-  avg = prod_summary["sum"] / count if count > 0 else 0.0
-  client.table("products").update({"review_count": count, "average_rating": round(avg, 2)}).eq("id", product_id).execute()
-  
-  # Fetch fresh product row to return
-  fresh_product_rows = client.table("products").select("*").eq("id", product_id).execute().data or []
-  fresh_product = fresh_product_rows[0] if fresh_product_rows else product
-  
   return {
     "message": "Review saved successfully",
     "review": serialize_review(stored, user_map=reviewer_map),
-    "summary": serialize_product(fresh_product, artisan_map=artisan_map, review_summary=review_summary),
+    "summary": serialize_product(product, artisan_map=artisan_map, review_summary=review_summary),
   }
 
 
@@ -1670,83 +1501,6 @@ async def get_artisans(userId: Optional[str] = None):
   return [serialize_artisan(row, user_map=user_map) for row in items]
 
 
-@app.post("/api/orders/create-razorpay-order")
-async def create_razorpay_order(payload: OrderPayload, authorization: Optional[str] = Header(default=None)):
-  user = require_user(authorization)
-  client = require_supabase()
-  
-  if not razorpay_client:
-      raise HTTPException(status_code=500, detail={"message": "Razorpay not configured"})
-      
-  # Calculate total amount
-  total_amount = float(payload.total_amount)
-  amount_in_paise = int(total_amount * 100)
-  
-  try:
-      order_data = {
-          "amount": amount_in_paise,
-          "currency": "INR",
-          "receipt": str(uuid.uuid4())
-      }
-      razorpay_order = razorpay_client.order.create(data=order_data)
-      return {
-          "order_id": razorpay_order["id"],
-          "amount": razorpay_order["amount"],
-          "currency": razorpay_order["currency"],
-          "key_id": razorpay_key_id,
-      }
-  except Exception as e:
-      raise HTTPException(status_code=500, detail={"message": f"Failed to create Razorpay order: {str(e)}"})
-
-
-class RazorpayVerificationPayload(BaseModel):
-    razorpay_order_id: str
-    razorpay_payment_id: str
-    razorpay_signature: str
-    product_id: str
-    quantity: int
-    total_amount: float
-    shipping_address: dict
-
-@app.post("/api/orders/verify-payment")
-async def verify_payment(payload: RazorpayVerificationPayload, authorization: Optional[str] = Header(default=None)):
-    user = require_user(authorization)
-    client = require_supabase()
-    
-    if not razorpay_client:
-        raise HTTPException(status_code=500, detail={"message": "Razorpay not configured"})
-        
-    try:
-        # Verify signature
-        params_dict = {
-            'razorpay_order_id': payload.razorpay_order_id,
-            'razorpay_payment_id': payload.razorpay_payment_id,
-            'razorpay_signature': payload.razorpay_signature
-        }
-        razorpay_client.utility.verify_payment_signature(params_dict)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail={"message": "Invalid payment signature"})
-        
-    # Signature is valid, create the order in Supabase
-    document = {
-        "buyer_id": user["id"],
-        "product_id": payload.product_id,
-        "quantity": payload.quantity,
-        "total_amount": payload.total_amount,
-        "status": "paid",
-        "shipping_address": payload.shipping_address,
-        "razorpay_order_id": payload.razorpay_order_id,
-        "razorpay_payment_id": payload.razorpay_payment_id,
-        "created_at": datetime.utcnow().isoformat()
-    }
-    
-    response = client.table("orders").insert(document).execute()
-    order = (response.data or [None])[0]
-    if not order:
-        raise HTTPException(status_code=500, detail={"message": "Order insertion failed"})
-    return serialize_order(order)
-
-
 @app.post("/api/orders")
 async def create_order(payload: OrderPayload, authorization: Optional[str] = Header(default=None)):
   user = require_user(authorization)
@@ -1771,339 +1525,3 @@ async def get_orders(authorization: Optional[str] = Header(default=None)):
   product_rows = client.table("products").select("*").in_("id", product_ids).execute().data if product_ids else []
   product_map = {row.get("id"): row for row in (product_rows or [])}
   return [serialize_order(row, product_map=product_map) for row in order_rows]
-
-
-@app.get("/api/artisans/orders")
-async def get_artisan_orders(authorization: Optional[str] = Header(default=None)):
-  user = require_user(authorization)
-  if user.get("role") != "artisan":
-    raise HTTPException(status_code=403, detail={"message": "Only artisans can view these orders"})
-
-  client = require_supabase()
-  # 1. Fetch all products belonging to this artisan
-  product_rows = client.table("products").select("id, title, price, category").eq("artisan_id", user["id"]).execute().data or []
-  if not product_rows:
-      return []
-  
-  product_ids = [p["id"] for p in product_rows]
-  product_map = {p["id"]: p for p in product_rows}
-  
-  # 2. Fetch all orders for those products
-  order_rows = client.table("orders").select("*").in_("product_id", product_ids).order("created_at", desc=True).execute().data or []
-  
-  # 3. Fetch buyer names
-  buyer_ids = [o["buyer_id"] for o in order_rows if o.get("buyer_id")]
-  buyer_map = fetch_users_by_ids(buyer_ids)
-  
-  # 4. Serialize
-  results = []
-  for order in order_rows:
-      serialized = serialize_order(order)
-      # Embed product info
-      serialized["product"] = product_map.get(order.get("product_id"))
-      # Embed buyer info
-      buyer = buyer_map.get(order.get("buyer_id"))
-      serialized["buyer_name"] = buyer.get("full_name") or buyer.get("email") if buyer else "Unknown Buyer"
-      results.append(serialized)
-      
-  return results
-
-
-class OrderStatusUpdatePayload(BaseModel):
-    status: str
-
-@app.patch("/api/artisans/orders/{order_id}/status")
-async def update_artisan_order_status(order_id: str, payload: OrderStatusUpdatePayload, authorization: Optional[str] = Header(default=None)):
-    user = require_user(authorization)
-    if user.get("role") != "artisan":
-        raise HTTPException(status_code=403, detail={"message": "Only artisans can update order status"})
-        
-    client = require_supabase()
-    
-    # 1. Fetch the order
-    order_rows = client.table("orders").select("*").eq("id", order_id).execute().data or []
-    if not order_rows:
-        raise HTTPException(status_code=404, detail={"message": "Order not found"})
-    order = order_rows[0]
-    
-    # 2. Validate product ownership
-    product_rows = client.table("products").select("artisan_id").eq("id", order["product_id"]).execute().data or []
-    if not product_rows or product_rows[0].get("artisan_id") != user["id"]:
-        raise HTTPException(status_code=403, detail={"message": "You cannot update an order for a product you don't own"})
-        
-    # 3. Update status
-    valid_statuses = ["pending", "confirmed", "shipped", "delivered"]
-    if payload.status not in valid_statuses:
-        raise HTTPException(status_code=400, detail={"message": f"Invalid status. Must be one of {valid_statuses}"})
-        
-    response = client.table("orders").update({"status": payload.status}).eq("id", order_id).execute()
-    updated_order = (response.data or [None])[0]
-    if not updated_order:
-        raise HTTPException(status_code=500, detail={"message": "Failed to update order"})
-        
-    return serialize_order(updated_order)
-
-
-# ═══════════════════════════════════════════════════════════════════
-# AUCTION ORDER TRACKING & CONTACT EXCHANGE ENDPOINTS
-# ═══════════════════════════════════════════════════════════════════
-
-AUCTION_ORDER_STATUSES = ["won", "preparing", "ready_to_ship", "shipped", "delivered"]
-
-
-@app.get("/api/auction-orders")
-async def get_auction_orders(authorization: Optional[str] = Header(default=None)):
-  """Get all auction orders for the current user."""
-  user = require_user(authorization)
-  client = require_supabase()
-  user_id = user.get("id")
-
-  artisan_orders = client.table("auction_orders").select("*").eq("artisan_id", user_id).order("created_at", desc=True).execute().data or []
-  winner_orders = client.table("auction_orders").select("*").eq("winner_id", user_id).order("created_at", desc=True).execute().data or []
-
-  all_orders = {o["auction_id"]: o for o in artisan_orders}
-  for o in winner_orders:
-    if o["auction_id"] not in all_orders:
-      all_orders[o["auction_id"]] = o
-
-  auction_ids = list(all_orders.keys())
-  if not auction_ids:
-    return []
-
-  auctions = client.table("auction_items").select("id,title,current_bid,current_winner_id,current_winner_name,artisan_id,images,actual_end").in_("id", auction_ids).execute().data or []
-  auction_map = {a["id"]: a for a in auctions}
-
-  user_ids = set()
-  for o in all_orders.values():
-    user_ids.add(o.get("artisan_id", ""))
-    user_ids.add(o.get("winner_id", ""))
-  user_ids.discard("")
-  user_map = fetch_users_by_ids(list(user_ids)) if user_ids else {}
-
-  results = []
-  for auction_id, order in all_orders.items():
-    auction_info = auction_map.get(auction_id, {})
-    artisan_user = user_map.get(order.get("artisan_id"), {})
-    winner_user = user_map.get(order.get("winner_id"), {})
-    results.append({
-      **order,
-      "auction_title": auction_info.get("title", ""),
-      "winning_bid": auction_info.get("current_bid"),
-      "winner_name": auction_info.get("current_winner_name", ""),
-      "artisan_email": artisan_user.get("email", ""),
-      "artisan_name": artisan_user.get("full_name") or artisan_user.get("email", ""),
-      "winner_email": winner_user.get("email", ""),
-      "images": auction_info.get("images", []),
-      "actual_end": auction_info.get("actual_end"),
-      "role": "artisan" if order.get("artisan_id") == user_id else "winner",
-    })
-
-  return results
-
-
-@app.get("/api/auction-orders/{auction_id}")
-async def get_auction_order_detail(auction_id: str, authorization: Optional[str] = Header(default=None)):
-  """Get order status for a specific auction."""
-  user = require_user(authorization)
-  client = require_supabase()
-  user_id = user.get("id")
-
-  order_rows = client.table("auction_orders").select("*").eq("auction_id", auction_id).execute().data or []
-  if not order_rows:
-    raise HTTPException(status_code=404, detail={"message": "Auction order not found"})
-
-  order = order_rows[0]
-  if order.get("artisan_id") != user_id and order.get("winner_id") != user_id:
-    raise HTTPException(status_code=403, detail={"message": "You are not a party to this auction order"})
-
-  auction_rows = client.table("auction_items").select("*").eq("id", auction_id).execute().data or []
-  auction_info = auction_rows[0] if auction_rows else {}
-
-  user_ids_list = [order.get("artisan_id", ""), order.get("winner_id", "")]
-  user_map = fetch_users_by_ids([uid for uid in user_ids_list if uid])
-
-  artisan_user = user_map.get(order.get("artisan_id"), {})
-  winner_user = user_map.get(order.get("winner_id"), {})
-
-  return {
-    **order,
-    "auction_title": auction_info.get("title", ""),
-    "winning_bid": auction_info.get("current_bid"),
-    "winner_name": auction_info.get("current_winner_name", ""),
-    "artisan_email": artisan_user.get("email", ""),
-    "artisan_name": artisan_user.get("full_name") or artisan_user.get("email", ""),
-    "winner_email": winner_user.get("email", ""),
-    "images": auction_info.get("images", []),
-    "actual_end": auction_info.get("actual_end"),
-    "role": "artisan" if order.get("artisan_id") == user_id else "winner",
-  }
-
-
-@app.patch("/api/auction-orders/{auction_id}/status")
-async def update_auction_order_status(
-  auction_id: str,
-  payload: AuctionStatusUpdatePayload,
-  authorization: Optional[str] = Header(default=None),
-):
-  """Only the artisan can advance the delivery status."""
-  user = require_user(authorization)
-  client = require_supabase()
-
-  order_rows = client.table("auction_orders").select("*").eq("auction_id", auction_id).execute().data or []
-  if not order_rows:
-    raise HTTPException(status_code=404, detail={"message": "Auction order not found"})
-
-  order = order_rows[0]
-  if order.get("artisan_id") != user.get("id"):
-    raise HTTPException(status_code=403, detail={"message": "Only the artisan can update the order status"})
-
-  if payload.status not in AUCTION_ORDER_STATUSES:
-    raise HTTPException(status_code=400, detail={"message": f"Invalid status. Must be one of {AUCTION_ORDER_STATUSES}"})
-
-  current_index = AUCTION_ORDER_STATUSES.index(order.get("status", "won"))
-  new_index = AUCTION_ORDER_STATUSES.index(payload.status)
-  if new_index <= current_index:
-    raise HTTPException(status_code=400, detail={"message": "Status can only move forward"})
-
-  now = datetime.now(timezone.utc).isoformat()
-  update_data = {
-    "status": payload.status,
-    "updated_at": now,
-  }
-  if payload.note:
-    update_data["artisan_note"] = payload.note
-
-  response = client.table("auction_orders").update(update_data).eq("id", order["id"]).execute()
-  updated = (response.data or [None])[0]
-  if not updated:
-    raise HTTPException(status_code=500, detail={"message": "Failed to update order status"})
-  return updated
-
-
-@app.post("/api/auction-orders/{auction_id}/contact-request")
-async def create_contact_request(
-  auction_id: str,
-  payload: ContactRequestPayload,
-  authorization: Optional[str] = Header(default=None),
-):
-  """Either party initiates a contact exchange request."""
-  user = require_user(authorization)
-  client = require_supabase()
-  user_id = user.get("id")
-
-  phone = payload.phone.strip()
-  if not phone or not re.match(r"^\d{10,15}$", phone):
-    raise HTTPException(status_code=400, detail={"message": "Phone must be 10-15 digits"})
-
-  order_rows = client.table("auction_orders").select("*").eq("auction_id", auction_id).execute().data or []
-  if not order_rows:
-    raise HTTPException(status_code=404, detail={"message": "Auction order not found"})
-  order = order_rows[0]
-
-  if user_id != order.get("artisan_id") and user_id != order.get("winner_id"):
-    raise HTTPException(status_code=403, detail={"message": "You are not a party to this auction"})
-
-  existing = client.table("auction_contact_requests").select("*").eq("auction_id", auction_id).execute().data or []
-  if existing:
-    req = existing[0]
-    if req.get("requester_id") == user_id:
-      return req
-    if req.get("responder_id") == user_id and req.get("status") == "pending":
-      raise HTTPException(status_code=400, detail={"message": "A contact request already exists. Use the respond endpoint to accept or decline."})
-    raise HTTPException(status_code=400, detail={"message": "A contact exchange already exists for this auction"})
-
-  requester_role = "artisan" if user_id == order.get("artisan_id") else "winner"
-  responder_id = order.get("winner_id") if requester_role == "artisan" else order.get("artisan_id")
-
-  now = datetime.now(timezone.utc).isoformat()
-  response = client.table("auction_contact_requests").insert({
-    "auction_id": auction_id,
-    "requester_id": user_id,
-    "requester_role": requester_role,
-    "requester_phone": phone,
-    "responder_id": responder_id,
-    "status": "pending",
-    "created_at": now,
-    "updated_at": now,
-  }).execute()
-
-  return (response.data or [{}])[0]
-
-
-@app.post("/api/auction-orders/{auction_id}/contact-respond")
-async def respond_to_contact_request(
-  auction_id: str,
-  payload: ContactRespondPayload,
-  authorization: Optional[str] = Header(default=None),
-):
-  """The other party accepts or declines the contact exchange."""
-  user = require_user(authorization)
-  client = require_supabase()
-  user_id = user.get("id")
-
-  existing = client.table("auction_contact_requests").select("*").eq("auction_id", auction_id).execute().data or []
-  if not existing:
-    raise HTTPException(status_code=404, detail={"message": "No contact request found"})
-
-  req = existing[0]
-  if req.get("responder_id") != user_id:
-    raise HTTPException(status_code=403, detail={"message": "You are not the responder for this request"})
-
-  if req.get("status") != "pending":
-    raise HTTPException(status_code=400, detail={"message": f"Request is already {req.get('status')}"})
-
-  now = datetime.now(timezone.utc).isoformat()
-
-  if payload.action == "accept":
-    phone = payload.phone.strip()
-    if not phone or not re.match(r"^\d{10,15}$", phone):
-      raise HTTPException(status_code=400, detail={"message": "Phone must be 10-15 digits"})
-
-    response = client.table("auction_contact_requests").update({
-      "responder_phone": phone,
-      "status": "accepted",
-      "updated_at": now,
-    }).eq("id", req["id"]).execute()
-  elif payload.action == "decline":
-    response = client.table("auction_contact_requests").update({
-      "status": "declined",
-      "updated_at": now,
-    }).eq("id", req["id"]).execute()
-  else:
-    raise HTTPException(status_code=400, detail={"message": "Action must be 'accept' or 'decline'"})
-
-  return (response.data or [{}])[0]
-
-
-@app.get("/api/auction-orders/{auction_id}/contact")
-async def get_contact_status(auction_id: str, authorization: Optional[str] = Header(default=None)):
-  """Get contact exchange status and revealed phone numbers."""
-  user = require_user(authorization)
-  client = require_supabase()
-  user_id = user.get("id")
-
-  order_rows = client.table("auction_orders").select("*").eq("auction_id", auction_id).execute().data or []
-  if not order_rows:
-    raise HTTPException(status_code=404, detail={"message": "Auction order not found"})
-  order = order_rows[0]
-
-  if user_id != order.get("artisan_id") and user_id != order.get("winner_id"):
-    raise HTTPException(status_code=403, detail={"message": "You are not a party to this auction"})
-
-  existing = client.table("auction_contact_requests").select("*").eq("auction_id", auction_id).execute().data or []
-  if not existing:
-    return {"status": "none", "requester_id": None, "responder_id": None}
-
-  req = existing[0]
-  result = {
-    "status": req.get("status"),
-    "requester_id": req.get("requester_id"),
-    "requester_role": req.get("requester_role"),
-    "responder_id": req.get("responder_id"),
-  }
-
-  if req.get("status") == "accepted":
-    result["requester_phone"] = req.get("requester_phone")
-    result["responder_phone"] = req.get("responder_phone")
-
-  return result
