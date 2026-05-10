@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import os
 import re
@@ -1322,39 +1323,22 @@ async def upload_images(
   user = require_user(authorization)
   if user.get("role") != "artisan":
     raise HTTPException(status_code=403, detail={"message": "Only artisans can upload product images"})
-    
-  client = require_supabase()
-  bucket_name = os.getenv("SUPABASE_STORAGE_BUCKET", "product-images")
+
   image_urls = []
-  errors = []
-  
+
   for file in files:
     try:
-      ext = (file.filename or "image.jpg").rsplit(".", 1)[-1].lower()
-      if ext not in ("jpg", "jpeg", "png", "webp", "gif"):
-        ext = "jpg"
-      filename = f"{user['id']}/{uuid.uuid4()}.{ext}"
       content = await file.read()
-      
-      client.storage.from_(bucket_name).upload(
-        path=filename, 
-        file=content, 
-        file_options={"content-type": file.content_type or "image/jpeg"}
-      )
-      
-      public_url = client.storage.from_(bucket_name).get_public_url(filename)
-      image_urls.append(public_url)
+      content_type = file.content_type or "image/jpeg"
+      b64 = base64.b64encode(content).decode("utf-8")
+      data_url = f"data:{content_type};base64,{b64}"
+      image_urls.append(data_url)
     except Exception as e:
-      error_msg = str(e)
-      print(f"Failed to upload image {file.filename}: {error_msg}")
-      errors.append(f"{file.filename}: {error_msg}")
-      
+      print(f"Failed to process image {file.filename}: {e}")
+
   if not image_urls and files:
-    detail_msg = "Failed to upload images."
-    if errors:
-      detail_msg += f" Errors: {'; '.join(errors[:3])}"
-    raise HTTPException(status_code=500, detail={"message": detail_msg})
-    
+    raise HTTPException(status_code=500, detail={"message": "Failed to process images"})
+
   return {"image_urls": image_urls}
 
 
