@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Play, StopCircle, Pencil, CheckCircle2, XCircle, Users, Mail } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Play, StopCircle, Pencil, CheckCircle2, XCircle, Users, Mail, LogOut } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -14,6 +15,7 @@ const AdminDashboard = () => {
   const [auctionRequests, setAuctionRequests] = useState([]);
   const [auctions, setAuctions] = useState([]);
   const [regCounts, setRegCounts] = useState({});
+  const [metrics, setMetrics] = useState({ total_users: 0, total_artisans: 0, total_buyers: 0, users: [] });
   const [loading, setLoading] = useState(true);
   const [editAuction, setEditAuction] = useState(null);
   const [editOpen, setEditOpen] = useState(false);
@@ -27,15 +29,19 @@ const AdminDashboard = () => {
   const fetchData = async () => {
     try {
       setLoading(true);
-      const [requestsRes, auctionsRes] = await Promise.all([
+      const [requestsRes, auctionsRes, metricsRes] = await Promise.all([
         fetch("/api/admin/auction-requests", { headers }),
         fetch("/api/admin/auctions", { headers }),
+        fetch("/api/admin/metrics", { headers })
       ]);
       const requestsData = await requestsRes.json().catch(() => []);
       const auctionsData = await auctionsRes.json().catch(() => []);
+      const metricsData = await metricsRes.json().catch(() => ({}));
+      
       setAuctionRequests(Array.isArray(requestsData) ? requestsData : []);
       const auctionsList = Array.isArray(auctionsData) ? auctionsData : [];
       setAuctions(auctionsList);
+      setMetrics(metricsData);
 
       // Fetch registration counts for each auction
       const counts = {};
@@ -70,6 +76,13 @@ const AdminDashboard = () => {
     });
     return counts;
   }, [auctions]);
+
+  const navigate = useNavigate();
+  const handleLogout = () => {
+    localStorage.removeItem("ophelia_admin_token");
+    toast.success("Logged out successfully");
+    navigate("/admin/login");
+  };
 
   const handleApprove = async (auctionId, payload) => {
     try {
@@ -167,9 +180,15 @@ const AdminDashboard = () => {
   return (
     <div className="min-h-screen bg-gradient-warm text-foreground px-6 py-10">
       <div className="max-w-6xl mx-auto space-y-6">
-        <div>
-          <h1 className="text-3xl font-semibold">Auction Admin Dashboard</h1>
-          <p className="text-sm text-muted-foreground">Manage live auctions and approvals.</p>
+        <div className="flex justify-between items-center">
+          <div>
+            <h1 className="text-3xl font-semibold">Auction Admin Dashboard</h1>
+            <p className="text-sm text-muted-foreground">Manage live auctions, users, and approvals.</p>
+          </div>
+          <Button variant="outline" onClick={handleLogout}>
+            <LogOut className="w-4 h-4 mr-2" />
+            Log Out
+          </Button>
         </div>
 
         <div className="grid md:grid-cols-4 gap-4">
@@ -196,12 +215,53 @@ const AdminDashboard = () => {
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="requests">Auction Requests</TabsTrigger>
             <TabsTrigger value="auctions">All Auctions</TabsTrigger>
+            <TabsTrigger value="users">Users & Metrics</TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview">
             <Card className="p-6">
               <h2 className="text-xl font-semibold mb-4">Recent Activity</h2>
               <p className="text-muted-foreground">Stay tuned for more detailed activity insights.</p>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="users" className="space-y-4">
+            <div className="grid md:grid-cols-3 gap-4 mb-6">
+              <Card className="p-4 bg-primary/5">
+                <div className="text-sm text-muted-foreground">Total Users</div>
+                <div className="text-2xl font-bold">{metrics.total_users || 0}</div>
+              </Card>
+              <Card className="p-4 bg-primary/5">
+                <div className="text-sm text-muted-foreground">Artisans</div>
+                <div className="text-2xl font-bold text-amber-600">{metrics.total_artisans || 0}</div>
+              </Card>
+              <Card className="p-4 bg-primary/5">
+                <div className="text-sm text-muted-foreground">Buyers</div>
+                <div className="text-2xl font-bold text-emerald-600">{metrics.total_buyers || 0}</div>
+              </Card>
+            </div>
+            
+            <Card className="p-6">
+              <h2 className="text-xl font-semibold mb-4">User Directory</h2>
+              <div className="space-y-4 max-h-[500px] overflow-y-auto">
+                {metrics.users && metrics.users.length > 0 ? (
+                  metrics.users.map((u) => (
+                    <div key={u.id} className="flex justify-between items-center p-3 border rounded-lg">
+                      <div>
+                        <p className="font-medium">{u.full_name || "Unknown"}</p>
+                        <p className="text-sm text-muted-foreground flex items-center gap-1">
+                          <Mail className="w-3 h-3" /> {u.email}
+                        </p>
+                      </div>
+                      <span className={`px-3 py-1 rounded-full text-xs font-semibold ${u.role === "artisan" ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"}`}>
+                        {u.role}
+                      </span>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-muted-foreground">No users found.</p>
+                )}
+              </div>
             </Card>
           </TabsContent>
 
