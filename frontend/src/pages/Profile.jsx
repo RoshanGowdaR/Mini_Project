@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Briefcase, Loader2, Mail, Package, ShoppingBag, Sparkles, User, Trophy, Gavel } from "lucide-react";
+import { Briefcase, Loader2, Mail, Package, ShoppingBag, Sparkles, User, Trophy, Gavel, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 
 import Footer from "@/components/Footer";
 import Navigation from "@/components/Navigation";
@@ -113,6 +114,31 @@ export default function Profile() {
       console.error("Error fetching profile data:", error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDeleteProduct = async (productId) => {
+    if (!window.confirm("Are you sure you want to delete this product?")) {
+      return;
+    }
+
+    try {
+      const token = JSON.parse(localStorage.getItem("auth") || "{}").token;
+      const response = await fetch(`/api/products/${productId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (response.ok) {
+        toast.success("Product deleted successfully");
+        setProducts(products.filter((p) => p._id !== productId));
+      } else {
+        const error = await parseJsonSafely(response, { message: "Failed to delete product" });
+        toast.error(error.message);
+      }
+    } catch (error) {
+      console.error("Error deleting product:", error);
+      toast.error("An error occurred while deleting the product");
     }
   };
 
@@ -290,10 +316,20 @@ export default function Profile() {
                 <p className="text-muted-foreground">No products uploaded yet.</p>
               ) : (
                 products.map((product) => (
-                  <div key={product._id} className="rounded-lg border p-4">
-                    <p className="font-semibold">{product.title}</p>
-                    <p className="text-sm text-muted-foreground">{product.category}</p>
-                    <p className="text-sm text-primary font-medium">${Number(product.price || 0).toFixed(2)}</p>
+                  <div key={product._id} className="rounded-lg border p-4 flex justify-between items-center">
+                    <div>
+                      <p className="font-semibold">{product.title}</p>
+                      <p className="text-sm text-muted-foreground">{product.category}</p>
+                      <p className="text-sm text-primary font-medium">${Number(product.price || 0).toFixed(2)}</p>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                      onClick={() => handleDeleteProduct(product._id)}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
                   </div>
                 ))
               )}
