@@ -9,6 +9,7 @@ import { AuthProvider } from "@/hooks/useAuth";
 import Analytics from "./pages/Analytics";
 import ArtisanDashboard from "./pages/ArtisanDashboard";
 import ArtisanSetup from "./pages/ArtisanSetup";
+import ArtisanOrders from "./pages/ArtisanOrders";
 import Auth from "./pages/Auth";
 import AuctionRoom from "./pages/AuctionRoom";
 import Auctions from "./pages/Auctions";
@@ -39,6 +40,7 @@ const App = () => (
             <Route path="/product/:id" element={<ProductDetail />} />
             <Route path="/artisan-dashboard" element={<ArtisanDashboard />} />
             <Route path="/artisan-setup" element={<ArtisanSetup />} />
+            <Route path="/artisan/orders" element={<ArtisanOrders />} />
             <Route path="/upload-product" element={<UploadProduct />} />
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/profile" element={<Profile />} />

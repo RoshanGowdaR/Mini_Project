@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState } from "react";
+import { supabase } from "../lib/supabase";
 
 const AuthContext = createContext(undefined);
 
@@ -15,6 +16,47 @@ export const AuthProvider = ({ children }) => {
   const [token, setToken] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  // Exchange Supabase token for custom backend JWT
+  const exchangeSupabaseToken = async (supabaseSession) => {
+    try {
+      const response = await fetch("/api/auth/google", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          access_token: supabaseSession.access_token,
+          userType: "buyer" // Default for OAuth
+        }),
+      });
+      const data = await parseJsonSafely(response);
+      if (response.ok && data.token) {
+        save(data.user, data.token);
+      }
+    } catch (err) {
+      console.error("Token exchange failed:", err);
+    }
+  };
+
+  useEffect(() => {
+    const stored = localStorage.getItem("auth");
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      setUser(parsed.user || null);
+      setToken(parsed.token || null);
+    }
+    setLoading(false);
+
+    // Listen for Google Sign-In redirect via Supabase
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === "SIGNED_IN" && session) {
+        await exchangeSupabaseToken(session);
+      }
+    });
+
+    return () => {
+      authListener?.subscription?.unsubscribe();
+    };
+  }, []);
+
   useEffect(() => {
     const stored = localStorage.getItem("auth");
     if (stored) {
@@ -30,6 +72,34 @@ export const AuthProvider = ({ children }) => {
     setToken(nextToken);
     localStorage.setItem("auth", JSON.stringify({ user: nextUser, token: nextToken }));
   };
+
+  // Intercept fetch calls to catch 403 Banned User responses
+  useEffect(() => {
+    const originalFetch = window.fetch;
+    window.fetch = async (...args) => {
+      const response = await originalFetch(...args);
+      if (response.status === 403) {
+        const cloned = response.clone();
+        try {
+          const data = await cloned.json();
+          if (data.message === "User is banned") {
+            setUser(null);
+            setToken(null);
+            localStorage.removeItem("auth");
+            localStorage.removeItem("ophelia_admin_token");
+            await supabase.auth.signOut();
+            window.location.href = "/auth";
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
+      return response;
+    };
+    return () => {
+      window.fetch = originalFetch;
+    };
+  }, []);
 
   const signIn = async (email, password) => {
     try {
@@ -76,11 +146,12 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const signOut = () => {
+  const signOut = async () => {
     setUser(null);
     setToken(null);
     localStorage.removeItem("auth");
     localStorage.removeItem("ophelia_admin_token");
+    await supabase.auth.signOut();
   };
 
   return (

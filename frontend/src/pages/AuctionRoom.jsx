@@ -51,11 +51,7 @@ const AuctionRoom = () => {
     []
   );
 
-  useEffect(() => {
-    if (!authLoading && !user) {
-      navigate("/auth");
-    }
-  }, [user, authLoading, navigate]);
+  // Removed auth redirect from here so unauthenticated users can view the room
 
   useEffect(() => {
     const interval = setInterval(() => setNow(Date.now()), 1000);
@@ -167,6 +163,11 @@ const AuctionRoom = () => {
   }, [auction_id]);
 
   const handleRegister = async () => {
+    if (!user) {
+      toast.error("Please sign in to register for auctions.");
+      navigate("/auth");
+      return;
+    }
     try {
       setRegistering(true);
       const token = JSON.parse(localStorage.getItem("auth") || "{}").token;
@@ -518,11 +519,30 @@ const AuctionRoom = () => {
                   <div className="text-sm text-muted-foreground mb-1">Winner</div>
                   <div className="text-xl font-bold text-amber-700">{auction.current_winner_name}</div>
                   <div className="text-2xl font-bold text-primary mt-1">₹{Number(currentBid).toLocaleString()}</div>
+                  {auction.winner_email && (
+                     <div className="mt-4 pt-4 border-t border-amber-200">
+                       <p className="text-sm text-amber-800 font-medium mb-1">Winner Contact:</p>
+                       <p className="text-sm">{auction.winner_email}</p>
+                     </div>
+                  )}
+                  {auction.artisan_email && (
+                     <div className="mt-4 pt-4 border-t border-amber-200">
+                       <p className="text-sm text-amber-800 font-medium mb-1">Artisan Contact:</p>
+                       <p className="text-sm">{auction.artisan_email}</p>
+                     </div>
+                  )}
                 </div>
               ) : (
                 <p className="text-muted-foreground mb-4">No bids were placed on this auction.</p>
               )}
-              <Button variant="outline" onClick={() => navigate("/auctions")}>Back to Auctions</Button>
+              <div className="flex flex-wrap gap-3 justify-center">
+                <Button variant="outline" onClick={() => navigate("/auctions")}>Back to Auctions</Button>
+                {user && (user.id === auction.current_winner_id || user.id === auction.artisan_id) && auction.current_winner_name && (
+                  <Button onClick={() => navigate("/profile")}>
+                    {user.id === auction.artisan_id ? "📦 Manage Order" : "📋 View Order Status"}
+                  </Button>
+                )}
+              </div>
             </Card>
           </div>
         )}

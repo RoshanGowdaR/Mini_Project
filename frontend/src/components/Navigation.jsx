@@ -88,6 +88,15 @@ const Navigation = () => {
         },
       }
     );
+    if (user.role === "artisan") {
+      navItems.push({
+        label: "My Orders",
+        onClick: () => {
+          navigate("/artisan/orders");
+          closeMenu();
+        },
+      });
+    }
   }
 
   return (

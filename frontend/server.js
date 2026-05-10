@@ -11,10 +11,12 @@ const PORT = process.env.PORT || 8080;
 const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:4000";
 
 // Proxy /api requests to the backend
+const targetUrl = BACKEND_URL.endsWith("/") ? BACKEND_URL.slice(0, -1) : BACKEND_URL;
+
 app.use(
   "/api",
   createProxyMiddleware({
-    target: BACKEND_URL,
+    target: targetUrl + "/api",
     changeOrigin: true,
   })
 );
