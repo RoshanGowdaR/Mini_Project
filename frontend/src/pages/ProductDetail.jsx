@@ -164,7 +164,9 @@ export default function ProductDetail() {
 
     try {
       const token = JSON.parse(localStorage.getItem("auth") || "{}").token;
-      const response = await fetch("/api/orders", {
+      
+      // 1. Create Razorpay order
+      const orderResponse = await fetch("/api/orders/create-razorpay-order", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -178,13 +180,70 @@ export default function ProductDetail() {
         }),
       });
 
-      const data = await parseJsonSafely(response, {});
-      if (!response.ok) {
-        throw new Error(data.message || "Failed to place order");
+      const orderData = await parseJsonSafely(orderResponse, {});
+      if (!orderResponse.ok) {
+        throw new Error(orderData.message || "Failed to initialize payment");
       }
 
-      toast.success("Order placed successfully");
-      setShowBuyDialog(false);
+      // 2. Open Razorpay Checkout
+      const options = {
+        key: orderData.key_id,
+        amount: orderData.amount,
+        currency: orderData.currency,
+        name: "Ophelia Unbound AI",
+        description: `Purchase: ${product.title}`,
+        order_id: orderData.order_id,
+        handler: async function (response) {
+          try {
+            // 3. Verify Payment
+            const verifyResponse = await fetch("/api/orders/verify-payment", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+                product_id: product._id,
+                quantity,
+                total_amount: Number(product.price) * quantity,
+                shipping_address: shippingAddress,
+              }),
+            });
+
+            const verifyData = await parseJsonSafely(verifyResponse, {});
+            if (!verifyResponse.ok) {
+              throw new Error(verifyData.message || "Payment verification failed");
+            }
+
+            toast.success("Payment successful! Order placed.");
+            setShowBuyDialog(false);
+          } catch (err) {
+            console.error("Verification error:", err);
+            toast.error(err.message || "Payment verification failed");
+          }
+        },
+        prefill: {
+          name: user.full_name || shippingAddress.name,
+          email: user.email,
+        },
+        notes: {
+          address: shippingAddress.address,
+        },
+        theme: {
+          color: "#8B4513", // Primary brand color
+        },
+      };
+
+      const rzp1 = new window.Razorpay(options);
+      rzp1.on("payment.failed", function (response) {
+        toast.error(response.error.description || "Payment failed");
+      });
+      // Test Card Details: Card 4111 1111 1111 1111, any future expiry, CVV 123
+      rzp1.open();
+      
     } catch (error) {
       console.error("Error placing order:", error);
       toast.error(error.message || "Failed to place order");
@@ -192,6 +251,48 @@ export default function ProductDetail() {
       setBuyLoading(false);
     }
   };
+
+  const handleDemoPurchase = async () => {
+    if (!product || !user) return;
+    if (!shippingAddress.name || !shippingAddress.address || !shippingAddress.city || !shippingAddress.country || !shippingAddress.postalCode) {
+      toast.error("Please fill in all shipping details");
+      return;
+    }
+
+    setBuyLoading(true);
+    try {
+      const token = JSON.parse(localStorage.getItem("auth") || "{}").token;
+      
+      const orderResponse = await fetch("/api/orders", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          product_id: product._id,
+          quantity,
+          total_amount: Number(product.price) * quantity,
+          shipping_address: shippingAddress,
+          status: "pending"
+        }),
+      });
+
+      const orderData = await parseJsonSafely(orderResponse, {});
+      if (!orderResponse.ok) {
+        throw new Error(orderData.message || "Failed to create order");
+      }
+
+      toast.success("Demo order placed successfully!");
+      setShowBuyDialog(false);
+    } catch (error) {
+      console.error("Error placing demo order:", error);
+      toast.error(error.message || "Failed to place demo order");
+    } finally {
+      setBuyLoading(false);
+    }
+  };
+
 
   const handleReviewSubmit = async () => {
     if (!user) {
@@ -535,14 +636,20 @@ export default function ProductDetail() {
             </div>
           </div>
 
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowBuyDialog(false)}>
+          <DialogFooter className="flex-col sm:flex-row gap-2 mt-4 sm:space-x-0">
+            <Button variant="outline" onClick={() => setShowBuyDialog(false)} className="sm:mr-auto">
               Cancel
             </Button>
-            <Button variant="hero" onClick={handlePurchase} disabled={buyLoading}>
-              {buyLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <ShoppingCart className="w-4 h-4 mr-2" />}
-              Place Order
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="secondary" onClick={handleDemoPurchase} disabled={buyLoading}>
+                {buyLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <ShoppingCart className="w-4 h-4 mr-2" />}
+                Demo / COD
+              </Button>
+              <Button variant="hero" onClick={handlePurchase} disabled={buyLoading}>
+                {buyLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <ShoppingCart className="w-4 h-4 mr-2" />}
+                Pay via Razorpay
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>

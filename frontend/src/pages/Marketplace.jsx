@@ -209,6 +209,7 @@ export default function Marketplace() {
                         src={product.images?.[0] || "/placeholder.svg"}
                         alt={product.title}
                         className="w-full h-full object-cover group-hover:scale-110 transition-smooth"
+                        onError={(e) => { e.target.onerror = null; e.target.src = "/placeholder.svg"; }}
                       />
                       <Button
                         variant="glass"

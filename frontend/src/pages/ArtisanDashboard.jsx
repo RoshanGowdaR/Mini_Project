@@ -13,6 +13,7 @@ import {
   TrendingUp,
   Trash2,
   Upload,
+  Mail,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -665,6 +666,25 @@ export default function ArtisanDashboard() {
                           <Button className="mt-3" onClick={() => navigate(`/auctions/${request.id}`)}>
                             View Live Auction
                           </Button>
+                        )}
+                        {request.status === "ended" && (
+                          <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-md">
+                            <p className="font-semibold text-amber-800 flex items-center gap-1 mb-1">
+                              Winner: {request.current_winner_name || "None"}
+                            </p>
+                            {request.current_bid && (
+                              <p className="text-sm text-amber-900 font-medium mb-1">
+                                Winning Bid: ₹{Number(request.current_bid).toLocaleString()}
+                              </p>
+                            )}
+                            {request.winner_email ? (
+                              <p className="text-sm text-muted-foreground flex items-center gap-1">
+                                <Mail className="w-3 h-3" /> Contact: {request.winner_email}
+                              </p>
+                            ) : (
+                              <p className="text-sm text-muted-foreground">No contact info available.</p>
+                            )}
+                          </div>
                         )}
                       </Card>
                     ))}
