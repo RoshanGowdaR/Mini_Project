@@ -73,6 +73,34 @@ export const AuthProvider = ({ children }) => {
     localStorage.setItem("auth", JSON.stringify({ user: nextUser, token: nextToken }));
   };
 
+  // Intercept fetch calls to catch 403 Banned User responses
+  useEffect(() => {
+    const originalFetch = window.fetch;
+    window.fetch = async (...args) => {
+      const response = await originalFetch(...args);
+      if (response.status === 403) {
+        const cloned = response.clone();
+        try {
+          const data = await cloned.json();
+          if (data.message === "User is banned") {
+            setUser(null);
+            setToken(null);
+            localStorage.removeItem("auth");
+            localStorage.removeItem("ophelia_admin_token");
+            await supabase.auth.signOut();
+            window.location.href = "/auth";
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
+      return response;
+    };
+    return () => {
+      window.fetch = originalFetch;
+    };
+  }, []);
+
   const signIn = async (email, password) => {
     try {
       const response = await fetch("/api/auth/login", {
