@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import os
 import re
@@ -11,7 +12,7 @@ import bcrypt
 import jwt
 import resend
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from groq import Groq
@@ -498,9 +499,16 @@ def require_user(authorization: Optional[str]):
 
   token = authorization.split(" ", 1)[1]
   try:
-    return jwt.decode(token, jwt_secret, algorithms=["HS256"])
+    payload = jwt.decode(token, jwt_secret, algorithms=["HS256"])
   except jwt.InvalidTokenError as exc:
     raise HTTPException(status_code=401, detail={"message": "Invalid token"}) from exc
+
+  if supabase_client is not None:
+    user_data = supabase_client.table("users").select("is_banned").eq("id", payload.get("id")).execute().data
+    if user_data and user_data[0].get("is_banned"):
+      raise HTTPException(status_code=403, detail={"message": "User is banned"})
+
+  return payload
 
 
 def extract_message(detail: Any):
@@ -510,11 +518,19 @@ def extract_message(detail: Any):
 
 
 def get_groq_client():
-  if not groq_api_key:
+  backup_key = os.getenv("GROQ_BACKUP_API_KEY", "")
+  key_to_use = groq_api_key if groq_api_key else backup_key
+  if not key_to_use:
     return None
   try:
-    return Groq(api_key=groq_api_key)
+    client = Groq(api_key=key_to_use)
+    return client
   except Exception:
+    if key_to_use != backup_key:
+      try:
+        return Groq(api_key=backup_key)
+      except Exception:
+        return None
     return None
 
 
@@ -904,6 +920,43 @@ async def admin_me(authorization: Optional[str] = Header(default=None)):
   return {"id": admin.get("id"), "email": admin.get("email")}
 
 
+@app.get("/api/admin/metrics")
+async def get_admin_metrics(authorization: Optional[str] = Header(default=None)):
+  require_admin(authorization)
+  client = require_supabase()
+  
+  users_response = client.table("users").select("id,email,role,full_name,created_at,is_banned").order("created_at", desc=True).execute()
+  users = users_response.data or []
+  
+  artisans = [u for u in users if u.get("role") == "artisan"]
+  buyers = [u for u in users if u.get("role") == "buyer"]
+  
+  return {
+    "total_users": len(users),
+    "total_artisans": len(artisans),
+    "total_buyers": len(buyers),
+    "users": users
+  }
+
+
+class BanPayload(BaseModel):
+  is_banned: bool
+
+@app.patch("/api/admin/users/{user_id}/ban")
+async def ban_user(user_id: str, payload: BanPayload, authorization: Optional[str] = Header(default=None)):
+  require_admin(authorization)
+  client = require_supabase()
+  client.table("users").update({"is_banned": payload.is_banned}).eq("id", user_id).execute()
+  return {"message": f"User {'banned' if payload.is_banned else 'unbanned'} successfully"}
+
+@app.delete("/api/admin/users/{user_id}")
+async def delete_user(user_id: str, authorization: Optional[str] = Header(default=None)):
+  require_admin(authorization)
+  client = require_supabase()
+  client.table("users").delete().eq("id", user_id).execute()
+  return {"message": "User deleted successfully"}
+
+
 @app.get("/api/admin/auction-requests")
 async def get_auction_requests(authorization: Optional[str] = Header(default=None)):
   require_admin(authorization)
@@ -1092,6 +1145,25 @@ async def get_public_auctions():
   return response.data or []
 
 
+@app.get("/api/auctions/won")
+async def get_auctions_won(authorization: Optional[str] = Header(default=None)):
+  user = require_user(authorization)
+  client = require_supabase()
+  won_auctions = client.table("auction_items").select("*").eq("current_winner_id", user["id"]).eq("status", "ended").execute().data or []
+  return won_auctions
+
+
+@app.get("/api/auction-orders")
+async def get_auction_orders(authorization: Optional[str] = Header(default=None)):
+  user = require_user(authorization)
+  client = require_supabase()
+  try:
+    order_rows = client.table("auction_orders").select("*").or_(f"winner_id.eq.{user['id']},artisan_id.eq.{user['id']}").execute().data or []
+    return order_rows
+  except Exception:
+    return []
+
+
 @app.get("/api/auctions/{auction_id}")
 async def get_auction_detail(auction_id: str):
   client = require_supabase()
@@ -1266,6 +1338,33 @@ async def get_products(artisan_id: Optional[str] = None):
   artisan_map = fetch_users_by_ids(artisan_ids)
   review_summary = fetch_review_summary([row.get("id") for row in product_rows if row.get("id")])
   return [serialize_product(row, artisan_map=artisan_map, review_summary=review_summary) for row in product_rows]
+
+
+@app.post("/api/products/upload-images")
+async def upload_images(
+  files: List[UploadFile] = File(...),
+  authorization: Optional[str] = Header(default=None)
+):
+  user = require_user(authorization)
+  if user.get("role") != "artisan":
+    raise HTTPException(status_code=403, detail={"message": "Only artisans can upload product images"})
+
+  image_urls = []
+
+  for file in files:
+    try:
+      content = await file.read()
+      content_type = file.content_type or "image/jpeg"
+      b64 = base64.b64encode(content).decode("utf-8")
+      data_url = f"data:{content_type};base64,{b64}"
+      image_urls.append(data_url)
+    except Exception as e:
+      print(f"Failed to process image {file.filename}: {e}")
+
+  if not image_urls and files:
+    raise HTTPException(status_code=500, detail={"message": "Failed to process images"})
+
+  return {"image_urls": image_urls}
 
 
 @app.get("/api/products/{product_id}")
@@ -1461,3 +1560,77 @@ async def get_orders(authorization: Optional[str] = Header(default=None)):
   product_rows = client.table("products").select("*").in_("id", product_ids).execute().data if product_ids else []
   product_map = {row.get("id"): row for row in (product_rows or [])}
   return [serialize_order(row, product_map=product_map) for row in order_rows]
+
+
+class OrderStatusPayload(BaseModel):
+  status: str
+
+
+@app.get("/api/artisans/orders")
+async def get_artisan_orders(authorization: Optional[str] = Header(default=None)):
+  user = require_user(authorization)
+  if user.get("role") != "artisan":
+    raise HTTPException(status_code=403, detail={"message": "Only artisans can view artisan orders"})
+
+  client = require_supabase()
+  # Find all products belonging to this artisan
+  product_rows = client.table("products").select("id,title").eq("artisan_id", user["id"]).execute().data or []
+  product_ids = [p["id"] for p in product_rows]
+
+  if not product_ids:
+    return []
+
+  # Find all orders for those products
+  order_rows = client.table("orders").select("*").in_("product_id", product_ids).order("created_at", desc=True).execute().data or []
+
+  product_map = {p["id"]: p for p in product_rows}
+  buyer_ids = [row.get("buyer_id") for row in order_rows if row.get("buyer_id")]
+  buyer_map = fetch_users_by_ids(buyer_ids)
+
+  result = []
+  for order in order_rows:
+    product = product_map.get(order.get("product_id"))
+    buyer = buyer_map.get(order.get("buyer_id"))
+    result.append({
+      "_id": order.get("id"),
+      "product": {"title": product.get("title") if product else "Unknown"} if product else None,
+      "buyer_name": buyer.get("full_name", buyer.get("email", "Unknown")) if buyer else "Unknown",
+      "quantity": order.get("quantity"),
+      "total_amount": order.get("total_amount"),
+      "status": order.get("status", "pending"),
+      "shipping_address": order.get("shipping_address", {}),
+      "created_at": serialize_datetime(order.get("created_at")),
+    })
+
+  return result
+
+
+@app.patch("/api/artisans/orders/{order_id}/status")
+async def update_artisan_order_status(
+  order_id: str,
+  payload: OrderStatusPayload,
+  authorization: Optional[str] = Header(default=None),
+):
+  user = require_user(authorization)
+  if user.get("role") != "artisan":
+    raise HTTPException(status_code=403, detail={"message": "Only artisans can update order status"})
+
+  client = require_supabase()
+  # Verify this order belongs to one of the artisan's products
+  order_rows = client.table("orders").select("*").eq("id", order_id).execute().data or []
+  if not order_rows:
+    raise HTTPException(status_code=404, detail={"message": "Order not found"})
+
+  order = order_rows[0]
+  product_rows = client.table("products").select("artisan_id").eq("id", order.get("product_id")).execute().data or []
+  if not product_rows or product_rows[0].get("artisan_id") != user["id"]:
+    raise HTTPException(status_code=403, detail={"message": "Not your order"})
+
+  allowed_statuses = ["pending", "confirmed", "shipped", "delivered"]
+  if payload.status not in allowed_statuses:
+    raise HTTPException(status_code=400, detail={"message": f"Invalid status. Allowed: {', '.join(allowed_statuses)}"})
+
+  client.table("orders").update({"status": payload.status}).eq("id", order_id).execute()
+  return {"message": "Status updated", "status": payload.status}
+
+

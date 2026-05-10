@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS products (
   images JSONB DEFAULT '[]',
   stock_quantity INTEGER DEFAULT 0,
   is_available BOOLEAN DEFAULT TRUE,
+  average_rating NUMERIC(3,2) DEFAULT 0.0,
+  review_count INTEGER DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -52,6 +54,8 @@ CREATE TABLE IF NOT EXISTS orders (
   total_amount NUMERIC(10,2) NOT NULL,
   status TEXT DEFAULT 'pending',
   shipping_address JSONB DEFAULT '{}',
+  razorpay_order_id TEXT,
+  razorpay_payment_id TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -73,3 +77,13 @@ CREATE TABLE IF NOT EXISTS product_reviews (
 CREATE INDEX IF NOT EXISTS idx_products_artisan_id ON products(artisan_id);
 CREATE INDEX IF NOT EXISTS idx_orders_buyer_id ON orders(buyer_id);
 CREATE INDEX IF NOT EXISTS idx_reviews_product_id ON product_reviews(product_id);
+
+-- Table: groq_cache
+CREATE TABLE IF NOT EXISTS groq_cache (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  cache_key TEXT UNIQUE NOT NULL,
+  response JSONB NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_groq_cache_key ON groq_cache(cache_key);
