@@ -499,9 +499,16 @@ def require_user(authorization: Optional[str]):
 
   token = authorization.split(" ", 1)[1]
   try:
-    return jwt.decode(token, jwt_secret, algorithms=["HS256"])
+    payload = jwt.decode(token, jwt_secret, algorithms=["HS256"])
   except jwt.InvalidTokenError as exc:
     raise HTTPException(status_code=401, detail={"message": "Invalid token"}) from exc
+
+  if supabase_client is not None:
+    user_data = supabase_client.table("users").select("is_banned").eq("id", payload.get("id")).execute().data
+    if user_data and user_data[0].get("is_banned"):
+      raise HTTPException(status_code=403, detail={"message": "User is banned"})
+
+  return payload
 
 
 def extract_message(detail: Any):
@@ -918,7 +925,7 @@ async def get_admin_metrics(authorization: Optional[str] = Header(default=None))
   require_admin(authorization)
   client = require_supabase()
   
-  users_response = client.table("users").select("id,email,role,full_name,created_at").order("created_at", desc=True).execute()
+  users_response = client.table("users").select("id,email,role,full_name,created_at,is_banned").order("created_at", desc=True).execute()
   users = users_response.data or []
   
   artisans = [u for u in users if u.get("role") == "artisan"]
@@ -930,6 +937,24 @@ async def get_admin_metrics(authorization: Optional[str] = Header(default=None))
     "total_buyers": len(buyers),
     "users": users
   }
+
+
+class BanPayload(BaseModel):
+  is_banned: bool
+
+@app.patch("/api/admin/users/{user_id}/ban")
+async def ban_user(user_id: str, payload: BanPayload, authorization: Optional[str] = Header(default=None)):
+  require_admin(authorization)
+  client = require_supabase()
+  client.table("users").update({"is_banned": payload.is_banned}).eq("id", user_id).execute()
+  return {"message": f"User {'banned' if payload.is_banned else 'unbanned'} successfully"}
+
+@app.delete("/api/admin/users/{user_id}")
+async def delete_user(user_id: str, authorization: Optional[str] = Header(default=None)):
+  require_admin(authorization)
+  client = require_supabase()
+  client.table("users").delete().eq("id", user_id).execute()
+  return {"message": "User deleted successfully"}
 
 
 @app.get("/api/admin/auction-requests")
