@@ -1305,29 +1305,36 @@ async def upload_images(
     raise HTTPException(status_code=403, detail={"message": "Only artisans can upload product images"})
     
   client = require_supabase()
+  bucket_name = os.getenv("SUPABASE_STORAGE_BUCKET", "product-images")
   image_urls = []
+  errors = []
   
   for file in files:
     try:
-      ext = file.filename.split(".")[-1]
+      ext = (file.filename or "image.jpg").rsplit(".", 1)[-1].lower()
+      if ext not in ("jpg", "jpeg", "png", "webp", "gif"):
+        ext = "jpg"
       filename = f"{user['id']}/{uuid.uuid4()}.{ext}"
       content = await file.read()
       
-      # Upload to 'products' bucket
-      client.storage.from_("products").upload(
+      client.storage.from_(bucket_name).upload(
         path=filename, 
         file=content, 
-        file_options={"content-type": file.content_type}
+        file_options={"content-type": file.content_type or "image/jpeg"}
       )
       
-      public_url = client.storage.from_("products").get_public_url(filename)
+      public_url = client.storage.from_(bucket_name).get_public_url(filename)
       image_urls.append(public_url)
     except Exception as e:
-      print(f"Failed to upload image {file.filename}: {e}")
-      # Continue with other files or fail entire request? We'll continue but if all fail we could raise.
+      error_msg = str(e)
+      print(f"Failed to upload image {file.filename}: {error_msg}")
+      errors.append(f"{file.filename}: {error_msg}")
       
   if not image_urls and files:
-    raise HTTPException(status_code=500, detail={"message": "Failed to upload images"})
+    detail_msg = "Failed to upload images."
+    if errors:
+      detail_msg += f" Errors: {'; '.join(errors[:3])}"
+    raise HTTPException(status_code=500, detail={"message": detail_msg})
     
   return {"image_urls": image_urls}
 
@@ -1525,3 +1532,96 @@ async def get_orders(authorization: Optional[str] = Header(default=None)):
   product_rows = client.table("products").select("*").in_("id", product_ids).execute().data if product_ids else []
   product_map = {row.get("id"): row for row in (product_rows or [])}
   return [serialize_order(row, product_map=product_map) for row in order_rows]
+
+
+class OrderStatusPayload(BaseModel):
+  status: str
+
+
+@app.get("/api/artisans/orders")
+async def get_artisan_orders(authorization: Optional[str] = Header(default=None)):
+  user = require_user(authorization)
+  if user.get("role") != "artisan":
+    raise HTTPException(status_code=403, detail={"message": "Only artisans can view artisan orders"})
+
+  client = require_supabase()
+  # Find all products belonging to this artisan
+  product_rows = client.table("products").select("id,title").eq("artisan_id", user["id"]).execute().data or []
+  product_ids = [p["id"] for p in product_rows]
+
+  if not product_ids:
+    return []
+
+  # Find all orders for those products
+  order_rows = client.table("orders").select("*").in_("product_id", product_ids).order("created_at", desc=True).execute().data or []
+
+  product_map = {p["id"]: p for p in product_rows}
+  buyer_ids = [row.get("buyer_id") for row in order_rows if row.get("buyer_id")]
+  buyer_map = fetch_users_by_ids(buyer_ids)
+
+  result = []
+  for order in order_rows:
+    product = product_map.get(order.get("product_id"))
+    buyer = buyer_map.get(order.get("buyer_id"))
+    result.append({
+      "_id": order.get("id"),
+      "product": {"title": product.get("title") if product else "Unknown"} if product else None,
+      "buyer_name": buyer.get("full_name", buyer.get("email", "Unknown")) if buyer else "Unknown",
+      "quantity": order.get("quantity"),
+      "total_amount": order.get("total_amount"),
+      "status": order.get("status", "pending"),
+      "shipping_address": order.get("shipping_address", {}),
+      "created_at": serialize_datetime(order.get("created_at")),
+    })
+
+  return result
+
+
+@app.patch("/api/artisans/orders/{order_id}/status")
+async def update_artisan_order_status(
+  order_id: str,
+  payload: OrderStatusPayload,
+  authorization: Optional[str] = Header(default=None),
+):
+  user = require_user(authorization)
+  if user.get("role") != "artisan":
+    raise HTTPException(status_code=403, detail={"message": "Only artisans can update order status"})
+
+  client = require_supabase()
+  # Verify this order belongs to one of the artisan's products
+  order_rows = client.table("orders").select("*").eq("id", order_id).execute().data or []
+  if not order_rows:
+    raise HTTPException(status_code=404, detail={"message": "Order not found"})
+
+  order = order_rows[0]
+  product_rows = client.table("products").select("artisan_id").eq("id", order.get("product_id")).execute().data or []
+  if not product_rows or product_rows[0].get("artisan_id") != user["id"]:
+    raise HTTPException(status_code=403, detail={"message": "Not your order"})
+
+  allowed_statuses = ["pending", "confirmed", "shipped", "delivered"]
+  if payload.status not in allowed_statuses:
+    raise HTTPException(status_code=400, detail={"message": f"Invalid status. Allowed: {', '.join(allowed_statuses)}"})
+
+  client.table("orders").update({"status": payload.status}).eq("id", order_id).execute()
+  return {"message": "Status updated", "status": payload.status}
+
+
+@app.get("/api/auctions/won")
+async def get_auctions_won(authorization: Optional[str] = Header(default=None)):
+  user = require_user(authorization)
+  client = require_supabase()
+  won_auctions = client.table("auction_items").select("*").eq("current_winner_id", user["id"]).eq("status", "ended").execute().data or []
+  return won_auctions
+
+
+@app.get("/api/auction-orders")
+async def get_auction_orders(authorization: Optional[str] = Header(default=None)):
+  user = require_user(authorization)
+  client = require_supabase()
+
+  # Check for auction_orders table - return empty if table doesn't exist
+  try:
+    order_rows = client.table("auction_orders").select("*").or_(f"buyer_id.eq.{user['id']},artisan_id.eq.{user['id']}").execute().data or []
+    return order_rows
+  except Exception:
+    return []
