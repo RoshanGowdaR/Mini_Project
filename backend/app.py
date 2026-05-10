@@ -1119,6 +1119,25 @@ async def get_public_auctions():
   return response.data or []
 
 
+@app.get("/api/auctions/won")
+async def get_auctions_won(authorization: Optional[str] = Header(default=None)):
+  user = require_user(authorization)
+  client = require_supabase()
+  won_auctions = client.table("auction_items").select("*").eq("current_winner_id", user["id"]).eq("status", "ended").execute().data or []
+  return won_auctions
+
+
+@app.get("/api/auction-orders")
+async def get_auction_orders(authorization: Optional[str] = Header(default=None)):
+  user = require_user(authorization)
+  client = require_supabase()
+  try:
+    order_rows = client.table("auction_orders").select("*").or_(f"winner_id.eq.{user['id']},artisan_id.eq.{user['id']}").execute().data or []
+    return order_rows
+  except Exception:
+    return []
+
+
 @app.get("/api/auctions/{auction_id}")
 async def get_auction_detail(auction_id: str):
   client = require_supabase()
@@ -1606,22 +1625,3 @@ async def update_artisan_order_status(
   return {"message": "Status updated", "status": payload.status}
 
 
-@app.get("/api/auctions/won")
-async def get_auctions_won(authorization: Optional[str] = Header(default=None)):
-  user = require_user(authorization)
-  client = require_supabase()
-  won_auctions = client.table("auction_items").select("*").eq("current_winner_id", user["id"]).eq("status", "ended").execute().data or []
-  return won_auctions
-
-
-@app.get("/api/auction-orders")
-async def get_auction_orders(authorization: Optional[str] = Header(default=None)):
-  user = require_user(authorization)
-  client = require_supabase()
-
-  # Check for auction_orders table - return empty if table doesn't exist
-  try:
-    order_rows = client.table("auction_orders").select("*").or_(f"buyer_id.eq.{user['id']},artisan_id.eq.{user['id']}").execute().data or []
-    return order_rows
-  except Exception:
-    return []
