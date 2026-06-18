@@ -9,6 +9,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import Marketplace from "../Marketplace";
+import Analytics from "../Analytics";
 
 const AdminDashboard = () => {
   const [activeTab, setActiveTab] = useState("overview");
@@ -230,10 +232,10 @@ const AdminDashboard = () => {
 
         <div className="border-t pt-4 space-y-2 mt-auto">
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-2">Public Links</p>
-          <Button variant="ghost" className="w-full justify-start" onClick={() => navigate("/marketplace")}>
+          <Button variant={activeTab === "marketplace" ? "secondary" : "ghost"} className="w-full justify-start" onClick={() => setActiveTab("marketplace")}>
             <Store className="w-4 h-4 mr-3" /> Marketplace
           </Button>
-          <Button variant="ghost" className="w-full justify-start" onClick={() => navigate("/trend-analytics")}>
+          <Button variant={activeTab === "analytics" ? "secondary" : "ghost"} className="w-full justify-start" onClick={() => setActiveTab("analytics")}>
             <LineChart className="w-4 h-4 mr-3" /> Trend Analysis
           </Button>
           
@@ -247,8 +249,9 @@ const AdminDashboard = () => {
       <main className="flex-1 p-8 overflow-y-auto max-h-screen">
         <div className="max-w-6xl mx-auto space-y-8 animate-fade-in-up">
           
-          <div className="grid md:grid-cols-4 gap-4">
-          <Card className="p-4">
+          {["overview", "users", "requests", "auctions"].includes(activeTab) && (
+            <div className="grid md:grid-cols-4 gap-4">
+              <Card className="p-4">
             <div className="text-sm text-muted-foreground">Total Auctions</div>
             <div className="text-2xl font-bold">{statusCounts.total}</div>
           </Card>
@@ -262,9 +265,22 @@ const AdminDashboard = () => {
           </Card>
           <Card className="p-4">
             <div className="text-sm text-muted-foreground">Ended</div>
-            <div className="text-2xl font-bold text-slate-600">{statusCounts.ended}</div>
-          </Card>
+              <div className="text-2xl font-bold text-slate-600">{statusCounts.ended}</div>
+            </Card>
           </div>
+          )}
+
+          {activeTab === "marketplace" && (
+            <div className="-mx-8 -mt-8">
+              <Marketplace embedded={true} />
+            </div>
+          )}
+
+          {activeTab === "analytics" && (
+            <div className="-mx-8 -mt-8">
+              <Analytics embedded={true} />
+            </div>
+          )}
 
           {activeTab === "overview" && (
             <Card className="p-6">

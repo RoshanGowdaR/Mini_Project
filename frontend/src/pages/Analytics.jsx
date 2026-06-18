@@ -37,18 +37,18 @@ const defaultTrendData = {
   trending_products: [],
 };
 
-export default function Analytics() {
+export default function Analytics({ embedded = false }) {
   const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const { data: marketTrends, isRefreshing, lastUpdated, refresh } = useMarketTrends(defaultTrendData);
   const [fadeIn, setFadeIn] = useState(true);
 
   useEffect(() => {
-    if (!authLoading && !user) {
+    if (!embedded && !authLoading && !user) {
       navigate("/auth");
       return;
     }
-  }, [user, authLoading, navigate]);
+  }, [user, authLoading, navigate, embedded]);
 
   useEffect(() => {
     setFadeIn(false);
@@ -64,10 +64,10 @@ export default function Analytics() {
   }, [lastUpdated]);
 
   return (
-    <div className="min-h-screen flex flex-col bg-gradient-to-b from-background to-accent/10">
-      <Navigation />
+    <div className={`flex flex-col bg-background text-foreground ${embedded ? "" : "min-h-screen"}`}>
+      {!embedded && <Navigation />}
 
-      <main className="flex-1 container mx-auto px-4 py-8 mt-20">
+      <main className={`flex-1 container mx-auto px-4 py-8 ${embedded ? "" : "mt-20"}`}>
         <div className="mb-8">
           <h1 className="text-4xl font-bold bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
             Trend Analytics
@@ -208,7 +208,7 @@ export default function Analytics() {
         </div>
       </main>
 
-      <Footer />
+      {!embedded && <Footer />}
     </div>
   );
 }

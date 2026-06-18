@@ -30,7 +30,7 @@ const parseJsonSafely = async (response) => {
   }
 };
 
-export default function Marketplace() {
+export default function Marketplace({ embedded = false }) {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [products, setProducts] = useState([]);
@@ -106,10 +106,10 @@ export default function Marketplace() {
   });
 
   return (
-    <div className="min-h-screen">
-      <Navigation />
+    <div className={embedded ? "" : "min-h-screen"}>
+      {!embedded && <Navigation />}
 
-      <section className="pt-32 pb-16 bg-gradient-warm">
+      <section className={`${embedded ? "pt-8" : "pt-32"} pb-16 bg-gradient-warm`}>
         <div className="container mx-auto px-4">
           <div className="text-center max-w-3xl mx-auto mb-12">
             <h1 className="text-5xl font-bold mb-4">
@@ -237,7 +237,7 @@ export default function Marketplace() {
                       )}
 
                       <div className="flex items-center justify-between mb-4">
-                        <div className="text-xl font-bold text-primary">${Number(product.price || 0).toFixed(2)}</div>
+                        <div className="text-xl font-bold text-primary">₹{Number(product.price || 0).toFixed(2)}</div>
                         <div className="flex items-center gap-1 text-sm">
                           <Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />
                           <span className="font-medium">
@@ -293,7 +293,7 @@ export default function Marketplace() {
         currentUser={user}
       />
 
-      <Footer />
+      {!embedded && <Footer />}
     </div>
   );
 }
