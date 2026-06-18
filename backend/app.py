@@ -11,6 +11,9 @@ from typing import Any, Dict, List, Optional
 import bcrypt
 import jwt
 import resend
+import hmac
+import hashlib
+import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Request, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -175,6 +178,23 @@ class OrderPayload(BaseModel):
   shipping_address: Dict[str, Any] = Field(default_factory=dict)
 
 
+class RazorpayOrderPayload(BaseModel):
+  product_id: str
+  quantity: int
+  total_amount: float
+  shipping_address: Dict[str, Any] = Field(default_factory=dict)
+
+
+class RazorpayVerifyPayload(BaseModel):
+  razorpay_order_id: str
+  razorpay_payment_id: str
+  razorpay_signature: str
+  product_id: str
+  quantity: int
+  total_amount: float
+  shipping_address: Dict[str, Any] = Field(default_factory=dict)
+
+
 class ReviewPayload(BaseModel):
   rating: int = Field(ge=1, le=5)
   title: Optional[str] = None
@@ -198,7 +218,10 @@ def serialize_datetime(value: Any):
 def fetch_users_by_ids(user_ids: List[str]):
   if not user_ids:
     return {}
-  response = require_supabase().table("users").select("id,email,role,full_name").in_("id", user_ids).execute()
+  valid_ids = [uid for uid in user_ids if uid is not None and str(uid).strip() != "" and str(uid).strip().lower() != "none"]
+  if not valid_ids:
+    return {}
+  response = require_supabase().table("users").select("id,email,role,full_name").in_("id", valid_ids).execute()
   rows = response.data or []
   return {row["id"]: row for row in rows}
 
@@ -218,7 +241,10 @@ def fetch_user_by_id(user_id: str):
 def fetch_review_summary(product_ids: List[str]):
   if not product_ids:
     return {}
-  response = require_supabase().table("product_reviews").select("product_id,rating").in_("product_id", product_ids).execute()
+  valid_ids = [pid for pid in product_ids if pid is not None and str(pid).strip() != "" and str(pid).strip().lower() != "none"]
+  if not valid_ids:
+    return {}
+  response = require_supabase().table("product_reviews").select("product_id,rating").in_("product_id", valid_ids).execute()
   rows = response.data or []
   summary: Dict[str, Dict[str, Any]] = {}
   for row in rows:
@@ -1548,6 +1574,75 @@ async def create_order(payload: OrderPayload, authorization: Optional[str] = Hea
   order = (response.data or [None])[0]
   if not order:
     raise HTTPException(status_code=500, detail={"message": "Order creation failed"})
+  return serialize_order(order)
+
+
+@app.post("/api/orders/create-razorpay-order")
+async def create_razorpay_order(payload: RazorpayOrderPayload, authorization: Optional[str] = Header(default=None)):
+  user = require_user(authorization)
+  key_id = os.getenv("RAZORPAY_KEY_ID", "")
+  key_secret = os.getenv("RAZORPAY_KEY_SECRET", "")
+  if not key_id or not key_secret:
+    raise HTTPException(status_code=500, detail={"message": "Razorpay not configured on server"})
+  
+  amount_in_paise = int(payload.total_amount * 100)
+  
+  url = "https://api.razorpay.com/v1/orders"
+  async with httpx.AsyncClient() as client:
+    try:
+      response = await client.post(
+        url,
+        json={
+          "amount": amount_in_paise,
+          "currency": "INR",
+          "receipt": f"receipt_{int(time.time())}"
+        },
+        auth=(key_id, key_secret),
+        timeout=10.0
+      )
+    except Exception as e:
+      raise HTTPException(status_code=500, detail={"message": f"Failed to connect to Razorpay: {str(e)}"})
+    
+    if response.status_code != 200:
+      raise HTTPException(status_code=500, detail={"message": f"Razorpay order creation failed: {response.text}"})
+    
+    rzp_order = response.json()
+    return {
+      "key_id": key_id,
+      "amount": rzp_order["amount"],
+      "currency": rzp_order["currency"],
+      "order_id": rzp_order["id"]
+    }
+
+
+@app.post("/api/orders/verify-payment")
+async def verify_payment(payload: RazorpayVerifyPayload, authorization: Optional[str] = Header(default=None)):
+  user = require_user(authorization)
+  key_secret = os.getenv("RAZORPAY_KEY_SECRET", "")
+  if not key_secret:
+    raise HTTPException(status_code=500, detail={"message": "Razorpay not configured on server"})
+  
+  # Verify payment signature manually using hmac
+  msg = f"{payload.razorpay_order_id}|{payload.razorpay_payment_id}".encode("utf-8")
+  expected_signature = hmac.new(key_secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
+  
+  if not hmac.compare_digest(expected_signature, payload.razorpay_signature):
+    raise HTTPException(status_code=400, detail={"message": "Invalid payment signature"})
+  
+  client = require_supabase()
+  order_document = {
+    "buyer_id": user["id"],
+    "product_id": payload.product_id,
+    "quantity": payload.quantity,
+    "total_amount": payload.total_amount,
+    "status": "paid",
+    "shipping_address": payload.shipping_address,
+    "created_at": datetime.utcnow().isoformat()
+  }
+  response = client.table("orders").insert(order_document).execute()
+  order = (response.data or [None])[0]
+  if not order:
+    raise HTTPException(status_code=500, detail={"message": "Order insertion failed"})
   return serialize_order(order)
 
 
