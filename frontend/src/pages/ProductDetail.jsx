@@ -415,7 +415,7 @@ export default function ProductDetail() {
               </div>
 
               <Card className="p-6">
-                <div className="text-4xl font-bold text-primary mb-3">${Number(product.price || 0).toFixed(2)}</div>
+                <div className="text-4xl font-bold text-primary mb-3">₹{Number(product.price || 0).toFixed(2)}</div>
                 <p className="text-muted-foreground whitespace-pre-wrap">{product.description}</p>
               </Card>
 

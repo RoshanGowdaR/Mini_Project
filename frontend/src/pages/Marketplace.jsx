@@ -237,7 +237,7 @@ export default function Marketplace({ embedded = false }) {
                       )}
 
                       <div className="flex items-center justify-between mb-4">
-                        <div className="text-xl font-bold text-primary">${Number(product.price || 0).toFixed(2)}</div>
+                        <div className="text-xl font-bold text-primary">₹{Number(product.price || 0).toFixed(2)}</div>
                         <div className="flex items-center gap-1 text-sm">
                           <Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />
                           <span className="font-medium">

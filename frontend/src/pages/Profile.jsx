@@ -320,7 +320,7 @@ export default function Profile() {
                     <div>
                       <p className="font-semibold">{product.title}</p>
                       <p className="text-sm text-muted-foreground">{product.category}</p>
-                      <p className="text-sm text-primary font-medium">${Number(product.price || 0).toFixed(2)}</p>
+                      <p className="text-sm text-primary font-medium">₹{Number(product.price || 0).toFixed(2)}</p>
                     </div>
                     <Button
                       variant="ghost"
@@ -351,7 +351,7 @@ export default function Profile() {
                   <div key={order._id} className="rounded-lg border p-4">
                     <p className="font-semibold">{order.product_id?.title || "Marketplace order"}</p>
                     <p className="text-sm text-muted-foreground">Status: {order.status}</p>
-                    <p className="text-sm text-primary font-medium">${Number(order.total_amount || 0).toFixed(2)}</p>
+                    <p className="text-sm text-primary font-medium">₹{Number(order.total_amount || 0).toFixed(2)}</p>
                   </div>
                 ))
               )}

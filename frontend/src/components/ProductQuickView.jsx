@@ -76,7 +76,7 @@ export default function ProductQuickView({ product, open, onOpenChange, currentU
             </div>
 
             <div>
-              <p className="text-3xl font-bold text-primary">${Number(product.price || 0).toFixed(2)}</p>
+              <p className="text-3xl font-bold text-primary">₹{Number(product.price || 0).toFixed(2)}</p>
               <div className="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
                 <div className="flex items-center gap-1 text-yellow-500">
                   <Star className="h-4 w-4 fill-current" />

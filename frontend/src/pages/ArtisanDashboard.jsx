@@ -386,7 +386,7 @@ export default function ArtisanDashboard() {
                         <h3 className="font-bold text-lg mb-2 line-clamp-1">{product.title}</h3>
                         <p className="text-sm text-muted-foreground mb-3 line-clamp-2">{product.description}</p>
                         <div className="flex items-center justify-between text-sm">
-                          <span className="font-bold text-primary">${Number(product.price || 0).toFixed(2)}</span>
+                          <span className="font-bold text-primary">₹{Number(product.price || 0).toFixed(2)}</span>
                           <div className="flex gap-3 text-muted-foreground">
                             <span className="flex items-center gap-1">
                               <Eye className="w-4 h-4" />
