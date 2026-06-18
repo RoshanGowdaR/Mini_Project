@@ -35,7 +35,7 @@ export default function ProductQuickView({ product, open, onOpenChange, currentU
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl">
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{product.title}</DialogTitle>
           <DialogDescription>

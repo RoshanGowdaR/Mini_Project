@@ -573,7 +573,7 @@ export default function ProductDetail() {
       </div>
 
       <Dialog open={showBuyDialog} onOpenChange={setShowBuyDialog}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Complete Your Purchase</DialogTitle>
             <DialogDescription>Enter your shipping details to place the order.</DialogDescription>
